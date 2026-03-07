@@ -1,0 +1,100 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+myvenv/
+myenv/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Data files (CRITICAL: Don't upload datasets to Git)
+data/raw/
+data/asl_alphabet/
+data/*.npz
+data/*.csv
+data/*.zip
+*.jpg
+*.png
+*.jpeg
+*.mp4
+*.avi
+
+# Models (too large for Git - use Git LFS or cloud storage)
+models/*.pkl
+models/*.h5
+models/*.onnx
+models/*.tflite
+models/*.pth
+*.weights
+
+# Logs and temporary files
+logs/
+*.log
+temp/
+tmp/
+
+# Environment variables
+.env
+.env.local
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# System
+*.bak
+*.tmp
+*.temp
+
+# Exceptions (files you DO want to track)
+!models/.gitkeep
+!data/.gitkeep
+!data/README.md
