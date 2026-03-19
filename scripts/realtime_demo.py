@@ -1,13 +1,7 @@
 """
-Real-Time Webcam Demo
-Demonstrates the full ASL recognition pipeline
-
-Usage:
-    python scripts/realtime_demo.py --model models/asl_alphabet.pkl
-
-Reference: PRD Section 6.2 (Real-Time Demo)
+Professional ASL Recognition Demo
+Clean UI, Better Accuracy, Smooth Tracking
 """
-
 import os
 import sys
 import argparse
@@ -15,492 +9,374 @@ import numpy as np
 import cv2
 import time
 from pathlib import Path
+from collections import Counter
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gesture_platform import HandTracker, Normalizer, FeatureExtractor, ASLRecognizer
 
 
 def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description='Real-time ASL recognition demo'
-    )
-    parser.add_argument(
-        '--model',
-        type=str,
-        default='models/asl_alphabet.pkl',
-        help='Path to trained model'
-    )
-    parser.add_argument(
-        '--camera',
-        type=int,
-        default=0,
-        help='Camera device index'
-    )
-    parser.add_argument(
-        '--width',
-        type=int,
-        default=1280,
-        help='Camera frame width'
-    )
-    parser.add_argument(
-        '--height',
-        type=int,
-        default=720,
-        help='Camera frame height'
-    )
-    parser.add_argument(
-        '--threshold',
-        type=float,
-        default=0.70,
-        help='Confidence threshold (0-1)'
-    )
-    parser.add_argument(
-        '--smoothing',
-        action='store_true',
-        help='Enable temporal smoothing'
-    )
-    parser.add_argument(
-        '--show-landmarks',
-        action='store_true',
-        help='Show hand landmarks overlay'
-    )
-    parser.add_argument(
-        '--calibrate',
-        action='store_true',
-        help='Enable calibration mode'
-    )
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default='models/asl_alphabet.pkl')
+    parser.add_argument('--camera', type=int, default=0)
     return parser.parse_args()
 
 
-class RealtimeDemo:
-    """Real-time ASL recognition demo application."""
-
-    def __init__(
-        self,
-        model_path: str,
-        camera_index: int = 0,
-        frame_width: int = 1280,
-        frame_height: int = 720,
-        confidence_threshold: float = 0.70,
-        use_smoothing: bool = True,
-        show_landmarks: bool = True,
-        calibrate: bool = False
-    ):
-        """
-        Initialize the demo.
-
-        Args:
-            model_path: Path to trained model
-            camera_index: Camera device index
-            frame_width: Camera frame width
-            frame_height: Camera frame height
-            confidence_threshold: Minimum confidence to display prediction
-            use_smoothing: Enable temporal smoothing
-            show_landmarks: Show hand landmarks overlay
-            calibrate: Enable calibration mode
-        """
+class ProfessionalDemo:
+    def __init__(self, model_path: str, camera_index: int = 0):
         self.model_path = model_path
         self.camera_index = camera_index
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-        self.confidence_threshold = confidence_threshold
-        self.use_smoothing = use_smoothing
-        self.show_landmarks = show_landmarks
-        self.calibrate = calibrate
+
+        # Window size
+        self.window_width = 1600
+        self.window_height = 900
+
+        # Camera resolution
+        self.cam_width = 1280
+        self.cam_height = 720
 
         # FPS tracking
-        self.frame_count = 0
-        self.start_time = time.time()
         self.fps = 0
+        self.frame_times = []
 
         # Initialize components
-        self.tracker = HandTracker(max_num_hands=1)
+        self.tracker = HandTracker(
+            max_num_hands=1,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
+        )
         self.normalizer = Normalizer()
         self.feature_extractor = FeatureExtractor()
         self.recognizer = ASLRecognizer(
             model_path=model_path,
-            confidence_threshold=confidence_threshold,
-            use_smoothing=use_smoothing
+            confidence_threshold=0.75,  # Stricter
+            smoothing_window=7,  # More smoothing
+            use_smoothing=True
         )
 
-        # Camera
         self.cap = None
 
-        # Calibration state
-        self.calibration_frames = []
-        self.calibration_complete = False
+        # Prediction buffer for extra smoothing
+        self.prediction_buffer = []
+        self.buffer_size = 15
 
-    def setup_camera(self) -> bool:
-        """
-        Setup camera.
+        # Current stable prediction
+        self.stable_prediction = None
+        self.stable_confidence = 0.0
 
-        Returns:
-            True if camera opened successfully
-        """
+        # History for display
+        self.prediction_history = []
+        self.max_history = 10
+
+    def setup_camera(self):
         self.cap = cv2.VideoCapture(self.camera_index)
-
         if not self.cap.isOpened():
-            print(f"Error: Could not open camera {self.camera_index}")
+            print("Error: Cannot open camera")
             return False
 
-        # Set camera properties
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cam_height)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
 
-        # Get actual properties
-        actual_width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        actual_height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-
-        print(f"Camera opened: {int(actual_width)}x{int(actual_height)}")
-
+        print(f"✅ Camera initialized: {self.cam_width}x{self.cam_height}")
         return True
 
-    def process_frame(self, frame: np.ndarray):
-        """
-        Process a single frame.
-
-        Args:
-            frame: BGR image from camera
-
-        Returns:
-            Processed frame with overlay
-        """
-        # Detect hands
+    def process_frame(self, frame):
+        """Process frame with extra smoothing"""
         hands = self.tracker.process(frame)
 
         if not hands:
-            # No hand detected
-            return frame, None, 0.0
+            self.prediction_buffer.clear()
+            return None, 0.0
 
-        # Get first hand
         hand = hands[0]
         landmarks = hand['landmarks']
-        handedness = hand['handedness']
 
-        # Draw landmarks if enabled
-        if self.show_landmarks:
-            frame = self.tracker.draw_landmarks(frame, hand)
+        # Draw smooth landmarks (custom drawing)
+        self.draw_smooth_landmarks(frame, landmarks)
 
-        # Handle calibration
-        if self.calibrate and not self.calibration_complete:
-            return self._process_calibration(frame, landmarks, handedness)
-
-        # Normalize landmarks
-        if self.normalizer.calibrated_hand_size:
-            normalized = self.normalizer.normalize_with_calibration(landmarks)
-        else:
-            normalized = self.normalizer.normalize(landmarks)
-
-        # Extract features
+        # Normalize and extract features
+        normalized = self.normalizer.normalize(landmarks)
         features = self.feature_extractor.extract_static(normalized)
 
-        # Predict
-        if self.use_smoothing:
-            prediction, confidence = self.recognizer.predict_with_smoothing(features)
-        else:
-            prediction, confidence = self.recognizer.predict(features)
+        # Get prediction
+        prediction, confidence = self.recognizer.predict_with_smoothing(features)
 
-        return frame, prediction, confidence
+        if prediction and confidence > 0.75:
+            self.prediction_buffer.append(prediction)
 
-    def _process_calibration(
-        self,
-        frame: np.ndarray,
-        landmarks: np.ndarray,
-        handedness: str
-    ):
-        """Process calibration frame."""
-        # Add to calibration samples
-        self.calibration_frames.append(landmarks)
+            # Keep buffer limited
+            if len(self.prediction_buffer) > self.buffer_size:
+                self.prediction_buffer.pop(0)
 
-        # Draw calibration indicator
-        progress = len(self.calibration_frames) / 90  # 3 seconds @ 30 FPS
+            # Get most common prediction (majority vote)
+            if len(self.prediction_buffer) >= 5:
+                counter = Counter(self.prediction_buffer)
+                most_common = counter.most_common(1)[0]
 
-        cv2.putText(
-            frame,
-            f"Calibrating... {len(self.calibration_frames)}/90",
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 255),
-            2
-        )
+                # Only update if it's consistent (at least 60% of buffer)
+                if most_common[1] >= len(self.prediction_buffer) * 0.6:
+                    if most_common[0] != self.stable_prediction:
+                        self.stable_prediction = most_common[0]
+                        self.stable_confidence = confidence
 
-        # Draw progress bar
-        bar_width = 400
-        bar_height = 20
-        bar_x = (frame.shape[1] - bar_width) // 2
-        bar_y = frame.shape[0] - 50
+                        # Add to history
+                        if self.stable_prediction not in ['nothing', 'space']:
+                            self.prediction_history.append(self.stable_prediction)
+                            if len(self.prediction_history) > self.max_history:
+                                self.prediction_history.pop(0)
 
-        cv2.rectangle(
-            frame,
-            (bar_x, bar_y),
-            (bar_x + bar_width, bar_y + bar_height),
-            (100, 100, 100),
-            2
-        )
+        return self.stable_prediction, self.stable_confidence
 
-        cv2.rectangle(
-            frame,
-            (bar_x, bar_y),
-            (bar_x + int(bar_width * progress), bar_y + bar_height),
-            (0, 255, 255),
-            -1
-        )
+    def draw_smooth_landmarks(self, frame, landmarks):
+        """Draw smooth, professional landmarks"""
+        h, w = frame.shape[:2]
 
-        # Complete calibration after 90 frames (3 seconds)
-        if len(self.calibration_frames) >= 90:
-            self._complete_calibration()
-
-        return frame, None, 0.0
-
-    def _complete_calibration(self):
-        """Complete calibration process."""
-        # Calculate median hand size
-        hand_sizes = []
-        for landmarks in self.calibration_frames:
-            # Calculate hand size (wrist to middle finger tip)
-            wrist = landmarks[0]
-            middle_tip = landmarks[12]
-            hand_size = np.linalg.norm(middle_tip - wrist)
-            hand_sizes.append(hand_size)
-
-        median_hand_size = np.median(hand_sizes)
-
-        # Set calibration
-        self.normalizer.load_calibration(median_hand_size)
-
-        self.calibration_complete = True
-        self.calibration_frames = []
-
-        print(f"Calibration complete! Hand size: {median_hand_size:.4f}")
-
-    def draw_prediction(
-        self,
-        frame: np.ndarray,
-        prediction: str,
-        confidence: float
-    ) -> np.ndarray:
-        """
-        Draw prediction overlay on frame.
-
-        Args:
-            frame: Input frame
-            prediction: Predicted class
-            confidence: Confidence score
-
-        Returns:
-            Frame with overlay
-        """
-        if prediction is None:
-            return frame
-
-        # Determine color based on confidence
-        if confidence >= 0.90:
-            color = (0, 255, 0)  # Green
-        elif confidence >= 0.70:
-            color = (0, 255, 255)  # Yellow
-        else:
-            color = (0, 0, 255)  # Red
-
-        # Draw prediction box
-        box_width = 300
-        box_height = 100
-        box_x = (frame.shape[1] - box_width) // 2
-        box_y = 20
-
-        cv2.rectangle(
-            frame,
-            (box_x, box_y),
-            (box_x + box_width, box_y + box_height),
-            color,
-            2
-        )
-
-        # Draw prediction text
-        cv2.putText(
-            frame,
-            prediction,
-            (box_x + 30, box_y + 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.5,
-            color,
-            3
-        )
-
-        # Draw confidence
-        conf_text = f"{confidence:.0%}"
-        cv2.putText(
-            frame,
-            conf_text,
-            (box_x + 180, box_y + 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            color,
-            2
-        )
-
-        return frame
-
-    def draw_fps(self, frame: np.ndarray) -> np.ndarray:
-        """Draw FPS counter on frame."""
-        # Calculate FPS
-        self.frame_count += 1
-        elapsed = time.time() - self.start_time
-
-        if elapsed >= 1.0:
-            self.fps = self.frame_count / elapsed
-            self.frame_count = 0
-            self.start_time = time.time()
-
-        # Draw FPS
-        cv2.putText(
-            frame,
-            f"FPS: {self.fps:.1f}",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2
-        )
-
-        return frame
-
-    def draw_help(self, frame: np.ndarray) -> np.ndarray:
-        """Draw help text on frame."""
-        help_text = [
-            "Controls:",
-            "  'q' - Quit",
-            "  'c' - Calibrate",
-            "  'r' - Reset smoothing"
+        # Draw connections
+        connections = [
+            # Thumb
+            (0, 1), (1, 2), (2, 3), (3, 4),
+            # Index
+            (0, 5), (5, 6), (6, 7), (7, 8),
+            # Middle
+            (0, 9), (9, 10), (10, 11), (11, 12),
+            # Ring
+            (0, 13), (13, 14), (14, 15), (15, 16),
+            # Pinky
+            (0, 17), (17, 18), (18, 19), (19, 20),
+            # Palm
+            (5, 9), (9, 13), (13, 17)
         ]
 
-        y = frame.shape[0] - 100
-        for text in help_text:
-            cv2.putText(
-                frame,
-                text,
-                (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (200, 200, 200),
-                1
-            )
-            y += 20
+        # Draw lines (thicker, semi-transparent)
+        overlay = frame.copy()
+        for start_idx, end_idx in connections:
+            start = landmarks[start_idx]
+            end = landmarks[end_idx]
 
-        return frame
+            start_point = (int(start[0] * w), int(start[1] * h))
+            end_point = (int(end[0] * w), int(end[1] * h))
+
+            cv2.line(overlay, start_point, end_point, (0, 255, 0), 3)
+
+        # Blend
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+        # Draw points (larger, cleaner)
+        for i, landmark in enumerate(landmarks):
+            x, y = int(landmark[0] * w), int(landmark[1] * h)
+
+            # Different colors for different fingers
+            if i == 0:  # Wrist
+                color = (255, 255, 0)
+                radius = 8
+            elif i in [4, 8, 12, 16, 20]:  # Fingertips
+                color = (0, 255, 255)
+                radius = 7
+            else:
+                color = (0, 255, 0)
+                radius = 5
+
+            cv2.circle(frame, (x, y), radius, color, -1)
+            cv2.circle(frame, (x, y), radius, (255, 255, 255), 1)
+
+    def create_ui_frame(self, camera_frame, prediction, confidence):
+        """Create professional UI layout"""
+        # Create black canvas
+        canvas = np.zeros((self.window_height, self.window_width, 3), dtype=np.uint8)
+
+        # Background color
+        canvas[:] = (20, 20, 20)
+
+        # Calculate camera position (centered, larger)
+        cam_display_w = 1200
+        cam_display_h = int(cam_display_w * self.cam_height / self.cam_width)
+
+        cam_x = (self.window_width - cam_display_w) // 2
+        cam_y = 50
+
+        # Resize camera frame
+        camera_resized = cv2.resize(camera_frame, (cam_display_w, cam_display_h))
+
+        # Add camera frame to canvas
+        canvas[cam_y:cam_y+cam_display_h, cam_x:cam_x+cam_display_w] = camera_resized
+
+        # Draw border around camera
+        cv2.rectangle(canvas, (cam_x-2, cam_y-2),
+                     (cam_x+cam_display_w+2, cam_y+cam_display_h+2),
+                     (80, 80, 80), 2)
+
+        # Prediction display (below camera)
+        pred_y = cam_y + cam_display_h + 40
+
+        if prediction:
+            # Large prediction text
+            text_size = cv2.getTextSize(prediction, cv2.FONT_HERSHEY_BOLD, 4, 4)[0]
+            text_x = (self.window_width - text_size[0]) // 2
+
+            # Confidence color
+            if confidence >= 0.90:
+                color = (0, 255, 0)
+            elif confidence >= 0.75:
+                color = (0, 255, 255)
+            else:
+                color = (0, 165, 255)
+
+            # Draw prediction
+            cv2.putText(canvas, prediction, (text_x, pred_y),
+                       cv2.FONT_HERSHEY_BOLD, 4, color, 8)
+
+            # Confidence bar
+            bar_width = 400
+            bar_height = 20
+            bar_x = (self.window_width - bar_width) // 2
+            bar_y = pred_y + 30
+
+            # Background bar
+            cv2.rectangle(canvas, (bar_x, bar_y),
+                         (bar_x + bar_width, bar_y + bar_height),
+                         (60, 60, 60), -1)
+
+            # Confidence bar
+            conf_width = int(bar_width * confidence)
+            cv2.rectangle(canvas, (bar_x, bar_y),
+                         (bar_x + conf_width, bar_y + bar_height),
+                         color, -1)
+
+            # Confidence text
+            conf_text = f"{confidence:.0%}"
+            cv2.putText(canvas, conf_text,
+                       (bar_x + bar_width + 20, bar_y + 16),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        else:
+            # No hand detected
+            cv2.putText(canvas, "Show your hand...",
+                       (self.window_width // 2 - 200, pred_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (100, 100, 100), 2)
+
+        # History display
+        if self.prediction_history:
+            history_y = pred_y + 100
+            history_text = "History: " + " ".join(self.prediction_history)
+            cv2.putText(canvas, history_text,
+                       (50, history_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (150, 150, 150), 2)
+
+        # FPS counter
+        cv2.putText(canvas, f"FPS: {self.fps:.1f}",
+                   (20, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 2)
+
+        # Instructions
+        instructions = [
+            "Controls:",
+            "Q - Quit",
+            "R - Reset",
+            "C - Clear History",
+            "SPACE - Add Space"
+        ]
+
+        inst_y = self.window_height - 150
+        for i, inst in enumerate(instructions):
+            cv2.putText(canvas, inst,
+                       (20, inst_y + i * 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (120, 120, 120), 1)
+
+        return canvas
+
+    def update_fps(self):
+        """Calculate FPS"""
+        current_time = time.time()
+        self.frame_times.append(current_time)
+
+        # Keep only last second
+        self.frame_times = [t for t in self.frame_times if current_time - t < 1.0]
+
+        self.fps = len(self.frame_times)
 
     def run(self):
-        """Run the demo."""
-        # Setup camera
         if not self.setup_camera():
             return
 
-        print("\nStarting real-time demo...")
-        print("Press 'q' to quit")
-        print("Press 'c' to calibrate")
-        print("Press 'r' to reset smoothing")
+        print("\n" + "="*60)
+        print("ASL Recognition - Professional Demo")
+        print("="*60)
+        print("Controls:")
+        print("  Q - Quit")
+        print("  R - Reset prediction buffer")
+        print("  C - Clear history")
+        print("  SPACE - Add space to history")
+        print("="*60 + "\n")
 
-        if self.calibrate:
-            print("\nCalibration mode enabled!")
-            print("Hold your hand flat in front of the camera for 3 seconds")
-
-        print(f"\nModel loaded: {self.model_path}")
-        print(f"Confidence threshold: {self.confidence_threshold}")
-        print(f"Smoothing: {self.use_smoothing}")
+        cv2.namedWindow('ASL Recognition', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('ASL Recognition', self.window_width, self.window_height)
 
         running = True
 
         while running:
-            # Read frame
             ret, frame = self.cap.read()
-
             if not ret:
-                print("Error: Failed to read frame")
                 break
 
-            # Flip horizontally for mirror effect
+            # Mirror
             frame = cv2.flip(frame, 1)
 
-            # Process frame
-            processed_frame, prediction, confidence = self.process_frame(frame)
+            # Process
+            prediction, confidence = self.process_frame(frame)
 
-            # Draw prediction
-            if prediction is not None:
-                processed_frame = self.draw_prediction(
-                    processed_frame, prediction, confidence
-                )
+            # Create UI
+            ui_frame = self.create_ui_frame(frame, prediction, confidence)
 
-            # Draw FPS
-            processed_frame = self.draw_fps(processed_frame)
+            # Update FPS
+            self.update_fps()
 
-            # Draw help
-            processed_frame = self.draw_help(processed_frame)
+            # Show
+            cv2.imshow('ASL Recognition', ui_frame)
 
-            # Show frame
-            cv2.imshow('Gesture Platform - ASL Recognition', processed_frame)
-
-            # Handle keypress
+            # Handle keys
             key = cv2.waitKey(1) & 0xFF
 
-            if key == ord('q'):
+            if key == ord('q') or key == ord('Q'):
                 running = False
-
-            elif key == ord('c'):
-                # Start calibration
-                self.calibration_frames = []
-                self.calibration_complete = False
-                print("Starting calibration...")
-
-            elif key == ord('r'):
-                # Reset smoothing
+            elif key == ord('r') or key == ord('R'):
+                self.prediction_buffer.clear()
+                self.stable_prediction = None
                 self.recognizer.reset_smoothing()
-                print("Smoothing buffer reset")
+                print("Reset")
+            elif key == ord('c') or key == ord('C'):
+                self.prediction_history.clear()
+                print("History cleared")
+            elif key == 32:  # Space
+                self.prediction_history.append('_')
+                print("Space added")
 
-        # Cleanup
         self.cleanup()
 
     def cleanup(self):
-        """Cleanup resources."""
         if self.cap:
             self.cap.release()
-
         cv2.destroyAllWindows()
-
         self.tracker.close()
 
-        print("\nDemo closed")
+        print("\n✅ Demo closed")
+
+        if self.prediction_history:
+            print(f"\nYour sentence: {' '.join(self.prediction_history)}")
 
 
 def main():
-    """Main function."""
     args = parse_args()
 
-    print("="*50)
-    print("Gesture Platform - Real-Time ASL Recognition")
-    print("="*50)
-
-    # Check if model exists
     if not os.path.exists(args.model):
-        print(f"\nError: Model not found at {args.model}")
-        print("\nTo train a model, run:")
-        print("  python scripts/preprocess_dataset.py --input data/asl_alphabet --output data/processed")
-        print("  python scripts/train_model.py --input data/processed --output models/asl_alphabet.pkl")
+        print(f"❌ Error: Model not found at {args.model}")
+        print("\nTrain a model first:")
+        print("  python scripts/train_model.py --input data/processed/asl_landmarks.npz --output models/asl_alphabet.pkl")
         return
 
-    # Create and run demo
-    demo = RealtimeDemo(
+    demo = ProfessionalDemo(
         model_path=args.model,
-        camera_index=args.camera,
-        frame_width=args.width,
-        frame_height=args.height,
-        confidence_threshold=args.threshold,
-        use_smoothing=args.smoothing,
-        show_landmarks=args.show_landmarks,
-        calibrate=args.calibrate
+        camera_index=args.camera
     )
 
     demo.run()

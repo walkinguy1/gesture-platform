@@ -1,16 +1,46 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '../store'
 
-export default function CameraView() {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+export default function CameraView({ active = true }) {
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)
   const [hasCamera, setHasCamera] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState(null)
+  const frameLoopRef = useRef(null)
 
-  const { setPrediction, setConfidence, settings } = useStore()
+  const { sendFrame, isConnected, settings } = useStore()
 
+  // Capture a frame from the video and send it via WebSocket
+  const captureAndSend = useCallback(() => {
+    if (!active || !isConnected) return
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    if (!video || !canvas || video.readyState < 2) return
+
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(video, 0, 0)
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          // reader.result is "data:image/jpeg;base64,XXXX"
+          const base64 = reader.result.split(',')[1]
+          sendFrame(base64)
+        }
+        reader.readAsDataURL(blob)
+      },
+      'image/jpeg',
+      0.7,
+    )
+  }, [active, isConnected, sendFrame])
+
+  // Camera init
   useEffect(() => {
-    let stream: MediaStream | null = null
+    let stream = null
 
     const initCamera = async () => {
       try {
@@ -28,8 +58,7 @@ export default function CameraView() {
         }
       } catch (err) {
         console.error('Camera error:', err)
-        setError('Could not access camera. Please grant permission.')
-        setHasCamera(false)
+        setError('Failed to access camera. Please allow camera access.')
       }
     }
 
@@ -42,89 +71,39 @@ export default function CameraView() {
     }
   }, [])
 
-  // Draw loop for landmarks overlay
+  // Frame capture loop (~15 fps to keep bandwidth reasonable)
   useEffect(() => {
-    if (!hasCamera || !canvasRef.current || !videoRef.current) return
+    if (!hasCamera || !active) return
 
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const interval = setInterval(captureAndSend, 66)
+    frameLoopRef.current = interval
 
-    let animationId: number
-
-    const draw = () => {
-      // Mirror the canvas
-      ctx.translate(canvas.width, 0)
-      ctx.scale(-1, 1)
-
-      // Draw video frame
-      if (videoRef.current) {
-        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height)
-      }
-
-      animationId = requestAnimationFrame(draw)
-    }
-
-    draw()
-
-    return () => {
-      cancelAnimationFrame(animationId)
-    }
-  }, [hasCamera])
-
-  if (error) {
-    return (
-      <div className="aspect-video bg-gray-900 flex items-center justify-center">
-        <div className="text-center p-6">
-          <div className="text-4xl mb-4">📷</div>
-          <p className="text-red-400">{error}</p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-4 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  if (!hasCamera) {
-    return (
-      <div className="aspect-video bg-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-pulse text-4xl mb-4">⏳</div>
-          <p className="text-gray-400">Loading camera...</p>
-        </div>
-      </div>
-    )
-  }
+    return () => clearInterval(interval)
+  }, [hasCamera, active, captureAndSend])
 
   return (
-    <div className="relative">
+    <div className="relative aspect-video bg-gray-900 rounded-lg overflow-hidden">
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-red-400">{error}</div>
+        </div>
+      )}
+
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className="w-full aspect-video bg-gray-900"
+        className="w-full h-full object-cover mirror"
         style={{ transform: 'scaleX(-1)' }}
       />
-      <canvas
-        ref={canvasRef}
-        width={1280}
-        height={720}
-        className="absolute top-0 left-0 w-full aspect-video pointer-events-none"
-      />
 
-      {/* Camera overlay */}
-      <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded text-sm">
-        <span className="text-green-400">●</span> Camera Active
-      </div>
+      {/* Hidden canvas used for frame capture */}
+      <canvas ref={canvasRef} className="hidden" />
 
-      {settings.showLandmarks && (
-        <div className="absolute bottom-4 right-4 bg-black/50 px-3 py-1 rounded text-sm">
-          Hand Tracking: ON
+      {!isConnected && hasCamera && (
+        <div className="absolute top-2 right-2 bg-red-600/80 text-xs px-2 py-1 rounded">
+          Backend offline
         </div>
       )}
     </div>

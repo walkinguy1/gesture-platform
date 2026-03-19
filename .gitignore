@@ -56,6 +56,7 @@ $RECYCLE.BIN/
 
 # Data files (CRITICAL: Don't upload datasets to Git)
 data/raw/
+data/processed/
 data/asl_alphabet/
 data/*.npz
 data/*.csv
@@ -88,6 +89,14 @@ tmp/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Node.js / Desktop app
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+
+# Tauri build artifacts
+src-tauri/target/
 
 # System
 *.bak

@@ -12,7 +12,10 @@ from pathlib import Path
 long_description = ""
 readme_path = Path(__file__).parent / "README.md"
 if readme_path.exists():
-    long_description = readme_path.read_text(encoding="utf-8")
+    try:
+        long_description = readme_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        long_description = readme_path.read_text(encoding="utf-16")
 
 # Read requirements
 requirements = []
@@ -63,11 +66,7 @@ setup(
             "mypy>=1.8.0",
         ],
     },
-    entry_points={
-        "console_scripts": [
-            "gesture-demo=scripts.realtime_demo:main",
-        ],
-    },
+    entry_points={},
     include_package_data=True,
     zip_safe=False,
 )
