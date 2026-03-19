@@ -1,33 +1,17 @@
-# Core dependencies
-mediapipe==0.10.14  # Updated: 0.10.9 no longer available
-opencv-python==4.10.0.84  # Updated to latest stable
-numpy==1.26.4  # Updated: 1.24.3 had compatibility issues with Python 3.11
-pandas==2.2.3  # Updated to latest
+# Core ML pipeline
+mediapipe==0.10.14
+opencv-python==4.10.0.84
+numpy==1.26.4
+scikit-learn==1.5.2
+Pillow==11.0.0
+tqdm==4.67.1
 
-# Machine Learning
-scikit-learn==1.5.2  # Updated to latest
-tensorflow==2.18.0  # Updated: Better CUDA 11.8 support for RTX 3060
-keras==3.8.0  # Updated to match TensorFlow
+# API server (desktop app backend)
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=14.0
 
-# Deep Learning utilities
-tf2onnx==1.16.1  # No change (still current)
-onnxruntime-gpu==1.20.1  # Updated to latest
-
-# Data processing
-Pillow==11.0.0  # Updated to latest
-scipy==1.14.1  # Updated to latest
-tqdm==4.67.1  # Updated to latest
-
-# Visualization
-matplotlib==3.9.3  # Updated to latest
-seaborn==0.13.2  # Updated to latest
-
-# Development tools
-jupyter==1.1.1  # Updated to latest
-ipykernel==6.29.5  # Updated to latest
-pytest==8.3.4  # Updated to latest
-pytest-cov==6.0.0  # Updated to latest
-
-# Utilities
-python-dotenv==1.0.1  # Updated to latest
-pyyaml==6.0.2  # Updated: Security fix
+# Optional: visualization (uncomment if needed for analysis scripts)
+# matplotlib==3.9.3
+# seaborn==0.13.2
+# pandas==2.2.3

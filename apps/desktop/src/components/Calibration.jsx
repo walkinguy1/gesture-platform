@@ -1,72 +1,67 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useStore } from '../store'
 import CameraView from './CameraView'
 
-interface CalibrationProps {
-  onComplete: () => void
-}
-
-export default function Calibration({ onComplete }: CalibrationProps) {
-  const [isCalibrating, setIsCalibrating] = useState(false)
-  const [progress, setProgress] = useState(0)
+export default function Calibration({ onComplete }) {
   const [calibrationComplete, setCalibrationComplete] = useState(false)
-  const [handSize, setHandSize] = useState<number | null>(null)
+  const [localProgress, setLocalProgress] = useState(0)
+  const [localHandSize, setLocalHandSize] = useState(null)
 
-  const { setHandSize: saveHandSize, setCalibrated } = useStore()
+  const {
+    sendCalibrationStart,
+    sendCalibrationStop,
+    isConnected,
+    isCalibrated,
+    handSize,
+  } = useStore()
 
-  const calibrationFrames = useRef<number[]>([])
-  const requiredFrames = 90  // 3 seconds @ 30 FPS
+  // Listen to store changes pushed by WebSocket
+  useEffect(() => {
+    const unsub = useStore.subscribe((state, prev) => {
+      if (state.isCalibrated && !prev.isCalibrated) {
+        setCalibrationComplete(true)
+        setLocalHandSize(state.handSize)
+        setLocalProgress(100)
+      }
+    })
+    return unsub
+  }, [])
+
+  // Also listen for calibration progress messages
+  useEffect(() => {
+    const handler = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'calibration' && data.status === 'progress') {
+          setLocalProgress(data.progress)
+        }
+      } catch { /* ignore */ }
+    }
+
+    const { ws } = useStore.getState()
+    if (ws) ws.addEventListener('message', handler)
+    return () => {
+      if (ws) ws.removeEventListener('message', handler)
+    }
+  }, [isConnected])
 
   const startCalibration = () => {
-    setIsCalibrating(true)
-    setProgress(0)
-    calibrationFrames.current = []
+    setLocalProgress(0)
+    sendCalibrationStart()
   }
 
-  // Simulate calibration progress
-  useEffect(() => {
-    if (!isCalibrating) return
-
-    const interval = setInterval(() => {
-      setProgress(prev => {
-        const newProgress = prev + (100 / requiredFrames)
-
-        if (newProgress >= 100) {
-          // Calibration complete
-          const avgHandSize = 0.15 + Math.random() * 0.02  // Simulated
-          setHandSize(avgHandSize)
-          saveHandSize(avgHandSize)
-          setCalibrated(true)
-          setCalibrationComplete(true)
-          setIsCalibrating(false)
-          return 100
-        }
-
-        // Simulate collecting frames
-        calibrationFrames.current.push(newProgress)
-
-        return newProgress
-      })
-    }, 33)  // ~30 FPS
-
-    return () => clearInterval(interval)
-  }, [isCalibrating])
+  const isCalibrating = localProgress > 0 && localProgress < 100 && !calibrationComplete
 
   return (
     <div className="max-w-2xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">
-          Hand Calibration
-        </h2>
+        <h2 className="text-2xl font-bold">Hand Calibration</h2>
       </div>
 
       {!calibrationComplete ? (
         <div className="space-y-6">
-          {/* Instructions */}
           <div className="bg-gray-800 rounded-xl p-6">
             <h3 className="text-lg font-semibold mb-4">Instructions</h3>
-
             <div className="space-y-4">
               <div className="flex gap-4">
                 <div className="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center font-bold">1</div>
@@ -100,11 +95,9 @@ export default function Calibration({ onComplete }: CalibrationProps) {
             </div>
           </div>
 
-          {/* Camera Preview */}
           <div className="bg-gray-800 rounded-xl overflow-hidden">
-            <CameraView />
+            <CameraView active={true} />
 
-            {/* Progress Overlay */}
             {isCalibrating && (
               <div className="p-6">
                 <div className="text-center mb-4">
@@ -116,42 +109,40 @@ export default function Calibration({ onComplete }: CalibrationProps) {
                   </div>
                 </div>
 
-                {/* Progress Bar */}
                 <div className="mb-4">
                   <div className="flex justify-between text-sm mb-2">
                     <span className="text-gray-400">Progress</span>
-                    <span>{Math.round(progress)}%</span>
+                    <span>{Math.round(localProgress)}%</span>
                   </div>
                   <div className="h-4 bg-gray-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-yellow-500 transition-all duration-100"
-                      style={{ width: `${progress}%` }}
+                      style={{ width: `${localProgress}%` }}
                     />
                   </div>
                 </div>
 
                 <div className="text-center text-sm text-gray-500">
-                  {Math.round((requiredFrames - (progress / 100) * requiredFrames) / 30)} seconds remaining
+                  {Math.max(0, Math.round((100 - localProgress) / 100 * 3))} seconds remaining
                 </div>
               </div>
             )}
           </div>
 
-          {/* Start Button */}
           {!isCalibrating && (
             <button
               onClick={startCalibration}
-              className="w-full py-4 bg-green-600 hover:bg-green-500 rounded-xl font-semibold text-lg"
+              disabled={!isConnected}
+              className="w-full py-4 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold text-lg"
             >
-              Start Calibration
+              {isConnected ? 'Start Calibration' : 'Waiting for backend...'}
             </button>
           )}
         </div>
       ) : (
-        // Calibration Complete
         <div className="space-y-6">
           <div className="bg-gray-800 rounded-xl p-8 text-center">
-            <div className="text-6xl mb-4">✓</div>
+            <div className="text-6xl mb-4">&#x2713;</div>
             <h3 className="text-2xl font-bold text-green-400 mb-2">
               Calibration Complete!
             </h3>
@@ -159,10 +150,10 @@ export default function Calibration({ onComplete }: CalibrationProps) {
               Your hand has been calibrated for optimal recognition
             </p>
 
-            {handSize && (
+            {localHandSize && (
               <div className="bg-gray-700 rounded-lg p-4 inline-block">
                 <div className="text-sm text-gray-400">Calibrated Hand Size</div>
-                <div className="text-2xl font-bold">{handSize.toFixed(4)}</div>
+                <div className="text-2xl font-bold">{localHandSize.toFixed(4)}</div>
               </div>
             )}
           </div>
@@ -176,7 +167,6 @@ export default function Calibration({ onComplete }: CalibrationProps) {
         </div>
       )}
 
-      {/* Tips */}
       <div className="mt-6 bg-gray-800 rounded-xl p-4">
         <h4 className="font-semibold mb-2">Why calibrate?</h4>
         <ul className="list-disc list-inside text-gray-400 text-sm space-y-1">

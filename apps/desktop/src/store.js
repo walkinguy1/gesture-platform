@@ -1,50 +1,26 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-interface AppState {
-  // Prediction state
-  prediction: string | null
-  confidence: number
+const API_URL = 'ws://127.0.0.1:8765/ws/predict'
+const REST_URL = 'http://127.0.0.1:8765'
 
-  // Calibration state
-  isCalibrated: boolean
-  handSize: number | null
-
-  // Progress tracking
-  progress: {
-    letters: string[]
-    words: string[]
-    totalPracticeTime: number
-    streak: number
-    lastPracticeDate: string | null
-  }
-
-  // Settings
-  settings: {
-    confidenceThreshold: number
-    smoothingEnabled: boolean
-    showLandmarks: boolean
-    languageModel: 'ASL' | 'BSL'
-  }
-
-  // Actions
-  setPrediction: (pred: string | null, conf: number) => void
-  setCalibrated: (calibrated: boolean) => void
-  setHandSize: (size: number) => void
-  updateProgress: (letter: string) => void
-  updateSettings: (settings: Partial<AppState['settings']>) => void
-  resetProgress: () => void
-}
-
-export const useStore = create<AppState>()(
+export const useStore = create(
   persist(
     (set, get) => ({
-      // Initial state
+      // Prediction state
       prediction: null,
       confidence: 0,
+      landmarks: [],
+
+      // Calibration state
       isCalibrated: false,
       handSize: null,
 
+      // WebSocket connection
+      ws: null,
+      isConnected: false,
+
+      // Progress tracking
       progress: {
         letters: [],
         words: [],
@@ -53,64 +29,127 @@ export const useStore = create<AppState>()(
         lastPracticeDate: null
       },
 
+      // Settings
       settings: {
         confidenceThreshold: 0.7,
+        smoothingWindow: 5,
         smoothingEnabled: true,
         showLandmarks: true,
+        showFPS: true,
         languageModel: 'ASL'
       },
 
       // Actions
-      setPrediction: (pred, conf) => set({
-        prediction: pred,
-        confidence: conf
-      }),
+      setPrediction: (pred, conf) => set({ prediction: pred, confidence: conf }),
 
       setCalibrated: (calibrated) => set({ isCalibrated: calibrated }),
 
       setHandSize: (size) => set({ handSize: size }),
 
-      updateProgress: (letter) => set((state) => {
-        const today = new Date().toISOString().split('T')[0]
-        const lastDate = state.progress.lastPracticeDate
+      // WebSocket connection management
+      connect: () => {
+        const { ws } = get()
+        if (ws && ws.readyState === WebSocket.OPEN) return
 
-        // Calculate streak
-        let streak = state.progress.streak
-        if (lastDate) {
-          const lastPracticeDate = new Date(lastDate)
-          const todayDate = new Date(today)
-          const diffDays = Math.floor(
-            (todayDate.getTime() - lastPracticeDate.getTime()) / (1000 * 60 * 60 * 24)
-          )
+        const socket = new WebSocket(API_URL)
 
-          if (diffDays === 1) {
-            streak += 1
-          } else if (diffDays > 1) {
-            streak = 1
-          }
-        } else {
-          streak = 1
+        socket.onopen = () => {
+          set({ ws: socket, isConnected: true })
         }
 
-        // Add letter if not already mastered
-        const letters = state.progress.letters.includes(letter)
-          ? state.progress.letters
-          : [...state.progress.letters, letter]
+        socket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data)
 
-        return {
-          progress: {
-            ...state.progress,
-            letters,
-            streak,
-            lastPracticeDate: today,
-            totalPracticeTime: state.progress.totalPracticeTime + 1
-          }
+            if (data.type === 'prediction') {
+              set({
+                prediction: data.prediction,
+                confidence: data.confidence || 0,
+                landmarks: data.landmarks || [],
+              })
+            } else if (data.type === 'calibration') {
+              if (data.status === 'complete') {
+                set({
+                  isCalibrated: true,
+                  handSize: data.hand_size,
+                })
+              }
+            }
+          } catch { /* ignore parse errors */ }
         }
-      }),
 
-      updateSettings: (newSettings) => set((state) => ({
-        settings: { ...state.settings, ...newSettings }
-      })),
+        socket.onclose = () => {
+          set({ ws: null, isConnected: false })
+        }
+
+        socket.onerror = () => {
+          set({ ws: null, isConnected: false })
+        }
+
+        set({ ws: socket })
+      },
+
+      disconnect: () => {
+        const { ws } = get()
+        if (ws) {
+          ws.close()
+          set({ ws: null, isConnected: false })
+        }
+      },
+
+      sendFrame: (frameBase64) => {
+        const { ws } = get()
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: 'predict', frame: frameBase64 }))
+        }
+      },
+
+      sendCalibrationStart: () => {
+        const { ws } = get()
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: 'calibrate_start' }))
+        }
+      },
+
+      sendCalibrationStop: () => {
+        const { ws } = get()
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: 'calibrate_stop' }))
+        }
+      },
+
+      updateProgress: (letter) => {
+        const { progress } = get()
+        if (!progress.letters.includes(letter)) {
+          set({
+            progress: {
+              ...progress,
+              letters: [...progress.letters, letter]
+            }
+          })
+        }
+      },
+
+      updateSettings: (newSettings) => {
+        const { settings } = get()
+        const merged = { ...settings, ...newSettings }
+        set({ settings: merged })
+
+        // Sync recognition-related settings to the backend REST API
+        const recognitionKeys = ['confidenceThreshold', 'smoothingWindow', 'smoothingEnabled']
+        const hasRecognitionChange = Object.keys(newSettings).some(k => recognitionKeys.includes(k))
+        if (hasRecognitionChange) {
+          fetch(`${REST_URL}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              confidence_threshold: merged.confidenceThreshold,
+              smoothing_window: merged.smoothingWindow,
+              smoothing_enabled: merged.smoothingEnabled,
+            }),
+          }).catch(() => { /* backend may not be running */ })
+        }
+      },
 
       resetProgress: () => set({
         progress: {
@@ -119,11 +158,19 @@ export const useStore = create<AppState>()(
           totalPracticeTime: 0,
           streak: 0,
           lastPracticeDate: null
-        }
+        },
+        isCalibrated: false,
+        handSize: null
       })
     }),
     {
-      name: 'gesture-platform-storage'
+      name: 'gesture-platform-storage',
+      partialize: (state) => ({
+        isCalibrated: state.isCalibrated,
+        handSize: state.handSize,
+        progress: state.progress,
+        settings: state.settings,
+      }),
     }
   )
 )
