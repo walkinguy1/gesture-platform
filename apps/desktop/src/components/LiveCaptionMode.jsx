@@ -2,18 +2,20 @@ import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import CameraView from './CameraView'
 
-// Tauri v2 plugin imports – gracefully degrade in browser dev mode
-let tauriSave, tauriWriteTextFile
-try {
-  const dialog = await import('@tauri-apps/dialog')
-  const fs = await import('@tauri-apps/fs')
-  tauriSave = dialog.save
-  tauriWriteTextFile = fs.writeTextFile
-} catch {
-  // Running outside Tauri (e.g. vite dev server)
-  tauriSave = null
-  tauriWriteTextFile = null
-}
+// Tauri v2 plugin imports – loaded lazily to degrade gracefully in browser dev mode
+let tauriSave = null
+let tauriWriteTextFile = null
+
+;(async () => {
+  try {
+    const dialog = await import('@tauri-apps/dialog')
+    const fs = await import('@tauri-apps/fs')
+    tauriSave = dialog.save
+    tauriWriteTextFile = fs.writeTextFile
+  } catch {
+    // Running outside Tauri (e.g. vite dev server)
+  }
+})()
 
 export default function LiveCaptionMode({ onBack }) {
   const [isRecording, setIsRecording] = useState(false)

@@ -10,6 +10,9 @@ from .hand_tracker import HandTracker
 from .normalizer import Normalizer
 from .feature_extractor import FeatureExtractor
 from .asl_recognizer import ASLRecognizer, ModelLoader
+from .config import Config, get_config, set_config
+from .pipeline import Pipeline
+from .augmentation import LandmarkAugmenter, augment_dataset
 
 __version__ = '1.0.0'
 __author__ = 'Gesture Platform Contributors'
@@ -21,6 +24,12 @@ __all__ = [
     'FeatureExtractor',
     'ASLRecognizer',
     'ModelLoader',
+    'Config',
+    'get_config',
+    'set_config',
+    'Pipeline',
+    'LandmarkAugmenter',
+    'augment_dataset',
 ]
 
 # Package metadata

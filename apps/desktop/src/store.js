@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 const API_URL = 'ws://127.0.0.1:8765/ws/predict'
+const REST_URL = 'http://127.0.0.1:8765'
 
 export const useStore = create(
   persist(
@@ -9,6 +10,7 @@ export const useStore = create(
       // Prediction state
       prediction: null,
       confidence: 0,
+      landmarks: [],
 
       // Calibration state
       isCalibrated: false,
@@ -60,7 +62,11 @@ export const useStore = create(
             const data = JSON.parse(event.data)
 
             if (data.type === 'prediction') {
-              set({ prediction: data.prediction, confidence: data.confidence || 0 })
+              set({
+                prediction: data.prediction,
+                confidence: data.confidence || 0,
+                landmarks: data.landmarks || [],
+              })
             } else if (data.type === 'calibration') {
               if (data.status === 'complete') {
                 set({
@@ -126,12 +132,23 @@ export const useStore = create(
 
       updateSettings: (newSettings) => {
         const { settings } = get()
-        set({
-          settings: {
-            ...settings,
-            ...newSettings
-          }
-        })
+        const merged = { ...settings, ...newSettings }
+        set({ settings: merged })
+
+        // Sync recognition-related settings to the backend REST API
+        const recognitionKeys = ['confidenceThreshold', 'smoothingWindow', 'smoothingEnabled']
+        const hasRecognitionChange = Object.keys(newSettings).some(k => recognitionKeys.includes(k))
+        if (hasRecognitionChange) {
+          fetch(`${REST_URL}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              confidence_threshold: merged.confidenceThreshold,
+              smoothing_window: merged.smoothingWindow,
+              smoothing_enabled: merged.smoothingEnabled,
+            }),
+          }).catch(() => { /* backend may not be running */ })
+        }
       },
 
       resetProgress: () => set({

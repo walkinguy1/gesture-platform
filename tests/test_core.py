@@ -228,7 +228,8 @@ class TestFeatureExtractor:
         features = extractor.extract_static(landmarks)
 
         assert features.shape == (63,)
-        np.testing.assert_array_equal(features, landmarks.flatten())
+        # extract_static casts to float32 for performance; allow small floating-point diff
+        np.testing.assert_array_almost_equal(features, landmarks.flatten(), decimal=6)
 
     def test_extract_with_velocity(self):
         """Test extraction with velocity."""
@@ -371,6 +372,130 @@ class TestIntegration:
         assert features.shape == (63,)
 
 
+from gesture_platform import Config, get_config, set_config, LandmarkAugmenter, augment_dataset
+from gesture_platform.config import (
+    CameraConfig, HandTrackerConfig, RecognitionConfig,
+    PipelineConfig, ModelConfig, LoggingConfig, ServerConfig,
+)
+
+
+class TestConfig:
+    """Tests for Config module."""
+
+    def test_defaults(self):
+        """Config should load with sane defaults."""
+        cfg = Config()
+        assert cfg.recognition.confidence_threshold == 0.70
+        assert cfg.recognition.smoothing_window == 5
+        assert cfg.server.port == 8765
+        assert cfg.pipeline.use_threading is True
+
+    def test_from_dict(self):
+        """Config.from_dict should override only specified keys."""
+        cfg = Config.from_dict({
+            "recognition": {"confidence_threshold": 0.85},
+            "server": {"port": 9000},
+        })
+        assert cfg.recognition.confidence_threshold == 0.85
+        assert cfg.server.port == 9000
+        # Non-specified keys retain defaults
+        assert cfg.recognition.smoothing_window == 5
+
+    def test_to_dict_roundtrip(self, tmp_path):
+        """Serialise → deserialise should preserve values."""
+        cfg = Config()
+        cfg.recognition.confidence_threshold = 0.95
+        cfg.server.port = 12345
+
+        data = cfg.to_dict()
+        cfg2 = Config.from_dict(data)
+
+        assert cfg2.recognition.confidence_threshold == 0.95
+        assert cfg2.server.port == 12345
+
+    def test_save_and_load_json(self, tmp_path):
+        """Config should persist to and reload from JSON."""
+        cfg = Config()
+        cfg.recognition.confidence_threshold = 0.88
+        path = tmp_path / "test_cfg.json"
+        cfg.save(path)
+
+        cfg2 = Config.from_file(path)
+        assert cfg2.recognition.confidence_threshold == 0.88
+
+    def test_missing_file_returns_defaults(self, tmp_path):
+        """from_file with non-existent path should return defaults."""
+        cfg = Config.from_file(tmp_path / "nonexistent.json")
+        assert cfg.recognition.confidence_threshold == 0.70
+
+    def test_singleton(self):
+        """set_config / get_config should work as a module-level singleton."""
+        original = get_config()
+        custom = Config()
+        custom.server.port = 9999
+        set_config(custom)
+        assert get_config().server.port == 9999
+        # Restore
+        set_config(original)
+
+
+class TestAugmentation:
+    """Tests for LandmarkAugmenter and augment_dataset."""
+
+    def _make_landmarks(self, n=1):
+        """Create random (n, 21, 3) landmark arrays."""
+        return np.random.rand(n, 21, 3).astype(np.float32)
+
+    def test_augmenter_output_shape(self):
+        """Augmented sample should have same shape as input."""
+        aug = LandmarkAugmenter(seed=0)
+        lm = self._make_landmarks()[0]
+        out = aug.augment(lm)
+        assert out.shape == lm.shape
+
+    def test_augmenter_deterministic_with_seed(self):
+        """Same seed should produce same result."""
+        lm = self._make_landmarks()[0]
+        out1 = LandmarkAugmenter(seed=42).augment(lm.copy())
+        out2 = LandmarkAugmenter(seed=42).augment(lm.copy())
+        np.testing.assert_array_almost_equal(out1, out2)
+
+    def test_augment_batch_shape(self):
+        """augment_batch should return (N * n_augments, 21, 3)."""
+        aug = LandmarkAugmenter(seed=1)
+        batch = self._make_landmarks(10)
+        result, indices = aug.augment_batch(batch, n_augments=3)
+        assert result.shape == (30, 21, 3)
+        assert indices.shape == (30,)
+
+    def test_augment_batch_flat_input(self):
+        """augment_batch should handle flat (N, 63) input."""
+        aug = LandmarkAugmenter(seed=2)
+        batch = self._make_landmarks(5).reshape(5, 63)
+        result, _ = aug.augment_batch(batch, n_augments=2)
+        assert result.shape == (10, 63)
+
+    def test_augment_dataset_expands(self):
+        """augment_dataset should return original + augmented rows."""
+        rng = np.random.default_rng(0)
+        X = rng.random((20, 63)).astype(np.float32)
+        y = np.array(['A'] * 10 + ['B'] * 10)
+        X_aug, y_aug = augment_dataset(X, y, n_augments=3, seed=0)
+        assert len(X_aug) == len(X) + 20 * 3  # 20 originals + 60 augmented
+        assert len(y_aug) == len(X_aug)
+
+    def test_no_flip(self):
+        """With flip_prob=0 no horizontal mirror should occur."""
+        aug = LandmarkAugmenter(
+            rotation_range=0, scale_range=(1.0, 1.0),
+            translation_range=0, noise_sigma=0, flip_prob=0, seed=0
+        )
+        lm = self._make_landmarks()[0]
+        out = aug.augment(lm)
+        # With all transforms disabled, output should equal input
+        np.testing.assert_array_almost_equal(out, lm)
+
+
 def run_tests():
     """Run all tests."""
     pytest.main([__file__, '-v', '--tb=short'])
@@ -378,3 +503,4 @@ def run_tests():
 
 if __name__ == '__main__':
     run_tests()
+

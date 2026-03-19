@@ -29,6 +29,7 @@ from .hand_tracker import HandTracker
 from .normalizer import Normalizer
 from .feature_extractor import FeatureExtractor
 from .asl_recognizer import ASLRecognizer, ModelLoader
+from .config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,28 @@ recognizer: Optional[ASLRecognizer] = None
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle hook."""
     global tracker, normalizer, extractor, recognizer
-    tracker = HandTracker(max_num_hands=1, static_image_mode=False)
+
+    cfg = get_config()
+    cfg.configure_logging()
+
+    ht = cfg.hand_tracker
+    tracker = HandTracker(
+        max_num_hands=ht.max_num_hands,
+        min_detection_confidence=ht.min_detection_confidence,
+        min_tracking_confidence=ht.min_tracking_confidence,
+        model_complexity=ht.model_complexity,
+        static_image_mode=False,
+    )
     normalizer = Normalizer()
-    extractor = FeatureExtractor()
-    recognizer = ASLRecognizer()
+    extractor = FeatureExtractor(
+        buffer_size=cfg.recognition.buffer_size,
+        include_velocity=cfg.recognition.include_velocity,
+    )
+    recognizer = ASLRecognizer(
+        confidence_threshold=cfg.recognition.confidence_threshold,
+        smoothing_window=cfg.recognition.smoothing_window,
+        use_smoothing=cfg.recognition.smoothing_enabled,
+    )
 
     # Try loading the default model
     default_path = ModelLoader.get_default_model_path()
@@ -249,11 +268,12 @@ async def ws_predict(websocket: WebSocket):
 
 def main():
     import uvicorn
+    cfg = get_config()
     uvicorn.run(
         "gesture_platform.api:app",
-        host="127.0.0.1",
-        port=8765,
-        log_level="info",
+        host=cfg.server.host,
+        port=cfg.server.port,
+        log_level=cfg.logging.level.lower(),
     )
 
 
