@@ -179,7 +179,7 @@ export default function Settings({ onBack }: SettingsProps) {
           <h3 className="text-lg font-semibold mb-4">About</h3>
 
           <div className="space-y-2 text-gray-400">
-            <p>Gesture Platform v1.0.0</p>
+            <p>Gesture Platform v2.0.0</p>
             <p>Real-time Sign Language Translation</p>
             <p className="text-sm">
               Built with MediaPipe, TensorFlow, and Tauri

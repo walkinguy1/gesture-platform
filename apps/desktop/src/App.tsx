@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/api/dialog'
 import { useStore } from './store'
 import CameraView from './components/CameraView'
 import PracticeMode from './components/PracticeMode'
