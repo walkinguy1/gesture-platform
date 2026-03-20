@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import CameraView from './CameraView'
-import { save } from '@tauri-apps/api/dialog'
-import { writeTextFile } from '@tauri-apps/api/fs'
+import { save } from '@tauri-apps/dialog'
+import { writeTextFile } from '@tauri-apps/fs'
 
 interface LiveCaptionModeProps {
   onBack: () => void
