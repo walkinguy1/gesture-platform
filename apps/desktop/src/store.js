@@ -28,7 +28,8 @@ interface AppState {
   }
 
   // Actions
-  setPrediction: (pred: string | null, conf: number) => void
+  setPrediction: (pred: string | null) => void
+  setConfidence: (conf: number) => void
   setCalibrated: (calibrated: boolean) => void
   setHandSize: (size: number) => void
   updateProgress: (letter: string) => void
@@ -61,10 +62,9 @@ export const useStore = create<AppState>()(
       },
 
       // Actions
-      setPrediction: (pred, conf) => set({
-        prediction: pred,
-        confidence: conf
-      }),
+      setPrediction: (pred) => set({ prediction: pred }),
+
+      setConfidence: (conf) => set({ confidence: conf }),
 
       setCalibrated: (calibrated) => set({ isCalibrated: calibrated }),
 
