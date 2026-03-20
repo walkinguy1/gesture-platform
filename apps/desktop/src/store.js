@@ -25,10 +25,13 @@ interface AppState {
     smoothingEnabled: boolean
     showLandmarks: boolean
     languageModel: 'ASL' | 'BSL'
+    theme: 'dark' | 'light'
+    cameraIndex: number
   }
 
   // Actions
-  setPrediction: (pred: string | null, conf: number) => void
+  setPrediction: (pred: string | null) => void
+  setConfidence: (conf: number) => void
   setCalibrated: (calibrated: boolean) => void
   setHandSize: (size: number) => void
   updateProgress: (letter: string) => void
@@ -57,14 +60,15 @@ export const useStore = create<AppState>()(
         confidenceThreshold: 0.7,
         smoothingEnabled: true,
         showLandmarks: true,
-        languageModel: 'ASL'
+        languageModel: 'ASL',
+        theme: 'dark',
+        cameraIndex: 0
       },
 
       // Actions
-      setPrediction: (pred, conf) => set({
-        prediction: pred,
-        confidence: conf
-      }),
+      setPrediction: (pred) => set({ prediction: pred }),
+
+      setConfidence: (conf) => set({ confidence: conf }),
 
       setCalibrated: (calibrated) => set({ isCalibrated: calibrated }),
 

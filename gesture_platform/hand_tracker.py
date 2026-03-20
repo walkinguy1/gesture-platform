@@ -1,6 +1,6 @@
 """
 Hand Tracker Module
-Wraps MediaPipe for hand landmark detection
+Wraps MediaPipe for hand landmark detection using the Tasks API.
 
 MediaPipe Hand Landmarks (21 Points):
 0: WRIST
@@ -10,21 +10,105 @@ MediaPipe Hand Landmarks (21 Points):
 13-16: RING (MCP, PIP, DIP, TIP)
 17-20: PINKY (MCP, PIP, DIP, TIP)
 
-Reference: https://google.github.io/mediapipe/solutions/hands
+Reference: https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker
 """
 
-import numpy as np
-from typing import List, Tuple, Optional, Dict
-import mediapipe as mp
+import logging
+import time
+import urllib.request
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import cv2
+import mediapipe as mp
+import numpy as np
+from mediapipe.tasks.python import vision as mp_vision
+from mediapipe.tasks.python.core.base_options import BaseOptions
+
+logger = logging.getLogger(__name__)
+
+# Hand skeleton connections for drawing
+HAND_CONNECTIONS: List[Tuple[int, int]] = [
+    # Thumb
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    # Index
+    (5, 6), (6, 7), (7, 8),
+    # Middle
+    (9, 10), (10, 11), (11, 12),
+    # Ring
+    (13, 14), (14, 15), (15, 16),
+    # Pinky
+    (17, 18), (18, 19), (19, 20),
+    # Palm
+    (0, 5), (5, 9), (9, 13), (13, 17), (0, 17),
+]
+
+# Default model download URL and local path
+_MODEL_DOWNLOAD_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+)
+_DEFAULT_MODEL_DIR = Path.home() / ".gesture_platform" / "models"
+_DEFAULT_MODEL_PATH = _DEFAULT_MODEL_DIR / "hand_landmarker.task"
+
+
+def get_default_model_path() -> Path:
+    """Return path to the bundled/cached hand landmarker model."""
+    local_paths = [
+        Path("models") / "hand_landmarker.task",
+        Path(__file__).parent.parent / "models" / "hand_landmarker.task",
+        _DEFAULT_MODEL_PATH,
+    ]
+    for p in local_paths:
+        if p.exists():
+            return p
+    return _DEFAULT_MODEL_PATH
+
+
+def download_model(dest: Optional[Path] = None) -> Path:
+    """
+    Download the MediaPipe hand landmarker model.
+
+    Args:
+        dest: Destination path. Defaults to ~/.gesture_platform/models/hand_landmarker.task
+
+    Returns:
+        Path to the downloaded model file.
+
+    Raises:
+        RuntimeError: If the download fails.
+    """
+    if dest is None:
+        dest = _DEFAULT_MODEL_PATH
+
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest.exists():
+        logger.debug("Model already exists at %s", dest)
+        return dest
+
+    logger.info("Downloading hand landmarker model to %s …", dest)
+    try:
+        urllib.request.urlretrieve(_MODEL_DOWNLOAD_URL, dest)
+        logger.info("Model downloaded successfully.")
+        return dest
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to download hand landmarker model from {_MODEL_DOWNLOAD_URL}. "
+            "Download the model manually and pass its path to HandTracker(model_path=...)."
+        ) from exc
 
 
 class HandTracker:
     """
-    Hand landmark detection using MediaPipe.
+    Hand landmark detection using MediaPipe Tasks API.
 
     Detects 21 landmarks per hand with 3D coordinates (x, y, z).
     Supports 1-2 hands simultaneously with handedness classification.
+
+    Requires the ``hand_landmarker.task`` model file. If the model is not
+    found, call :func:`download_model` first or pass ``model_path`` explicitly.
     """
 
     # Landmark indices for easy reference
@@ -56,7 +140,7 @@ class HandTracker:
         "INDEX_MCP", "INDEX_PIP", "INDEX_DIP", "INDEX_TIP",
         "MIDDLE_MCP", "MIDDLE_PIP", "MIDDLE_DIP", "MIDDLE_TIP",
         "RING_MCP", "RING_PIP", "RING_DIP", "RING_TIP",
-        "PINKY_MCP", "PINKY_PIP", "PINKY_DIP", "PINKY_TIP"
+        "PINKY_MCP", "PINKY_PIP", "PINKY_DIP", "PINKY_TIP",
     ]
 
     def __init__(
@@ -65,17 +149,24 @@ class HandTracker:
         min_detection_confidence: float = 0.7,
         min_tracking_confidence: float = 0.5,
         model_complexity: int = 1,
-        static_image_mode: bool = False
+        static_image_mode: bool = False,
+        model_path: Optional[str] = None,
     ):
         """
         Initialize the hand tracker.
 
         Args:
-            max_num_hands: Maximum number of hands to detect (1-2)
-            min_detection_confidence: Minimum detection confidence (0.0-1.0)
-            min_tracking_confidence: Minimum tracking confidence (0.0-1.0)
-            model_complexity: 0 (lightweight), 1 (full)
-            static_image_mode: If True, treats input as static images
+            max_num_hands: Maximum number of hands to detect (1-2).
+            min_detection_confidence: Minimum detection confidence (0.0-1.0).
+            min_tracking_confidence: Minimum tracking confidence (0.0-1.0).
+            model_complexity: Kept for API compatibility; complexity is determined
+                by the model file chosen.
+            static_image_mode: If True, use IMAGE running mode (slower but
+                accurate for static images). If False, use VIDEO mode (faster,
+                maintains tracking across frames).
+            model_path: Path to the ``hand_landmarker.task`` model file. If
+                ``None``, the default location is checked and the model is
+                downloaded automatically if absent.
         """
         self.max_num_hands = max_num_hands
         self.min_detection_confidence = min_detection_confidence
@@ -83,160 +174,136 @@ class HandTracker:
         self.model_complexity = model_complexity
         self.static_image_mode = static_image_mode
 
-        # Initialize MediaPipe hands
-        self._mp_hands = mp.solutions.hands
-        self._mp_drawing = mp.solutions.drawing_utils
-        self._mp_drawing_styles = mp.solutions.drawing_styles
+        # Resolve model path
+        if model_path is not None:
+            resolved = Path(model_path)
+        else:
+            resolved = get_default_model_path()
 
-        self.hands = self._mp_hands.Hands(
-            static_image_mode=static_image_mode,
-            max_num_hands=max_num_hands,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence,
-            model_complexity=model_complexity
+        if not resolved.exists():
+            resolved = download_model(resolved)
+
+        running_mode = (
+            mp_vision.RunningMode.IMAGE
+            if static_image_mode
+            else mp_vision.RunningMode.VIDEO
         )
 
-        # Results cache
-        self._last_results = None
-        self._last_image = None
+        options = mp_vision.HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(resolved)),
+            num_hands=max_num_hands,
+            min_hand_detection_confidence=min_detection_confidence,
+            min_hand_presence_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+            running_mode=running_mode,
+        )
+        self._detector = mp_vision.HandLandmarker.create_from_options(options)
+        self._running_mode = running_mode
+        self._timestamp_ms: int = 0
+
+        logger.debug("HandTracker initialised (model=%s, mode=%s)", resolved, running_mode)
 
     def process(self, image: np.ndarray) -> List[Dict]:
         """
         Process an image frame and detect hand landmarks.
 
         Args:
-            image: BGR image from OpenCV (HxWx3)
+            image: BGR image from OpenCV (H x W x 3).
 
         Returns:
             List of hand dictionaries, each containing:
-                - landmarks: numpy array of shape (21, 3) with x, y, z coordinates
-                - handedness: 'Left' or 'Right'
-                - confidence: detection confidence score
+
+            * ``landmarks`` – ``np.ndarray`` of shape (21, 3) with normalised
+              (x, y, z) coordinates.
+            * ``handedness`` – ``'Left'`` or ``'Right'``.
+            * ``confidence`` – detection confidence score.
+            * ``index`` – index among detected hands (0-based).
         """
-        # Convert BGR to RGB
-        if image is None:
+        if image is None or image.size == 0:
             return []
 
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        self._last_image = image
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
-        # Process the image
-        self._last_results = self.hands.process(image_rgb)
+        if self._running_mode == mp_vision.RunningMode.VIDEO:
+            self._timestamp_ms += 1
+            result = self._detector.detect_for_video(mp_image, self._timestamp_ms)
+        else:
+            result = self._detector.detect(mp_image)
 
-        if not self._last_results.multi_hand_landmarks:
+        if not result.hand_landmarks:
             return []
 
-        hands_data = []
+        hands_data: List[Dict] = []
+        for idx, (hand_lms, handedness_list) in enumerate(
+            zip(result.hand_landmarks, result.handedness)
+        ):
+            landmarks = np.array(
+                [[lm.x, lm.y, lm.z] for lm in hand_lms], dtype=np.float64
+            )
+            hand_label = handedness_list[0].category_name  # 'Left' or 'Right'
+            hand_conf = handedness_list[0].score
 
-        for idx, (hand_landmarks, handedness) in enumerate(zip(
-            self._last_results.multi_hand_landmarks,
-            self._last_results.multi_handedness
-        )):
-            # Extract landmarks as numpy array
-            landmarks = np.array([
-                [lm.x, lm.y, lm.z]
-                for lm in hand_landmarks.landmark
-            ])
-
-            # Get handedness
-            hand_handedness = handedness.classification[0].label
-            hand_confidence = handedness.classification[0].score
-
-            hands_data.append({
-                'landmarks': landmarks,
-                'handedness': hand_handedness,
-                'confidence': hand_confidence,
-                'index': idx
-            })
+            hands_data.append(
+                {
+                    "landmarks": landmarks,
+                    "handedness": hand_label,
+                    "confidence": hand_conf,
+                    "index": idx,
+                }
+            )
 
         return hands_data
-
-    def process_landmarks(self, landmarks: List) -> List[Dict]:
-        """
-        Process pre-extracted landmarks (for processing saved data).
-
-        Args:
-            landmarks: List of landmark objects from MediaPipe
-
-        Returns:
-            List containing single hand dictionary
-        """
-        if not landmarks:
-            return []
-
-        landmarks_array = np.array([
-            [lm.x, lm.y, lm.z]
-            for lm in landmarks.landmark
-        ])
-
-        return [{
-            'landmarks': landmarks_array,
-            'handedness': 'Right',  # Default, would need classification
-            'confidence': 1.0,
-            'index': 0
-        }]
 
     def draw_landmarks(
         self,
         image: np.ndarray,
         hand_data: Dict,
-        drawConnections: bool = True,
+        draw_connections: bool = True,
         landmark_color: Tuple[int, int, int] = (0, 255, 0),
-        connection_color: Tuple[int, int, int] = (0, 255, 0)
+        connection_color: Tuple[int, int, int] = (0, 200, 0),
+        landmark_radius: int = 4,
+        connection_thickness: int = 2,
     ) -> np.ndarray:
         """
-        Draw hand landmarks on the image.
+        Draw hand landmarks on the image using OpenCV.
 
         Args:
-            image: BGR image
-            hand_data: Hand data from process()
-            drawConnections: Whether to draw connections between landmarks
-            landmark_color: Color for landmarks (B, G, R)
-            connection_color: Color for connections (B, G, R)
+            image: BGR image.
+            hand_data: Single hand dictionary from :meth:`process`.
+            draw_connections: Whether to draw skeleton connections.
+            landmark_color: BGR colour for landmark circles.
+            connection_color: BGR colour for connections.
+            landmark_radius: Radius of landmark circles in pixels.
+            connection_thickness: Line thickness for connections.
 
         Returns:
-            Image with drawn landmarks
+            Image with drawn landmarks (drawn in-place).
         """
-        if not hand_data or 'landmarks' not in hand_data:
+        if not hand_data or "landmarks" not in hand_data:
             return image
 
-        # Create MediaPipe landmark list
-        landmarks = hand_data['landmarks']
+        landmarks = hand_data["landmarks"]
         h, w = image.shape[:2]
 
-        # Convert normalized coordinates to pixel coordinates
-        landmark_list = []
-        for i in range(len(landmarks)):
-            lm = landmarks[i]
-            landmark_list.append(
-                self._mp_hands.HandLandmark(
-                    x=lm[0],
-                    y=lm[1],
-                    z=lm[2]
+        # Convert normalised coords to pixel coords
+        pts = np.array(
+            [(int(lm[0] * w), int(lm[1] * h)) for lm in landmarks], dtype=np.int32
+        )
+
+        if draw_connections:
+            for start_idx, end_idx in HAND_CONNECTIONS:
+                cv2.line(
+                    image,
+                    tuple(pts[start_idx]),
+                    tuple(pts[end_idx]),
+                    connection_color,
+                    connection_thickness,
+                    lineType=cv2.LINE_AA,
                 )
-            )
 
-        # Create a mock HandLandmarks object
-        class MockLandmarks:
-            def __init__(self, landmarks):
-                self.landmark = landmarks
-
-        hand_landmarks = MockLandmarks(landmark_list)
-
-        # Draw landmarks
-        if drawConnections:
-            self._mp_drawing.draw_landmarks(
-                image,
-                hand_landmarks,
-                self._mp_hands.HAND_CONNECTIONS,
-                self._mp_drawing_styles.get_default_hand_landmarks_style(),
-                self._mp_drawing_styles.get_default_hand_connections_style()
-            )
-        else:
-            self._mp_drawing.draw_landmarks(
-                image,
-                hand_landmarks
-            )
+        for pt in pts:
+            cv2.circle(image, tuple(pt), landmark_radius, landmark_color, -1, lineType=cv2.LINE_AA)
 
         return image
 
@@ -245,73 +312,61 @@ class HandTracker:
         Calculate hand size as the distance between wrist and middle finger tip.
 
         Args:
-            landmarks: numpy array of shape (21, 3)
+            landmarks: numpy array of shape (21, 3).
 
         Returns:
-            Hand size in normalized coordinates
+            Hand size in normalised coordinates.
         """
         wrist = landmarks[self.WRIST]
         middle_tip = landmarks[self.MIDDLE_TIP]
-
-        return np.linalg.norm(middle_tip - wrist)
+        return float(np.linalg.norm(middle_tip - wrist))
 
     def get_wrist_position(self, landmarks: np.ndarray) -> np.ndarray:
         """
-        Get wrist position.
+        Return the wrist landmark position.
 
         Args:
-            landmarks: numpy array of shape (21, 3)
+            landmarks: numpy array of shape (21, 3).
 
         Returns:
-            Wrist position as numpy array (x, y, z)
+            Wrist position as a numpy array of shape (3,).
         """
         return landmarks[self.WRIST].copy()
 
     def get_finger_states(self, landmarks: np.ndarray) -> Dict[str, bool]:
         """
-        Determine which fingers are extended (up).
-
-        Uses landmark positions to determine if each finger is extended.
+        Determine which fingers are extended (pointing upward).
 
         Args:
-            landmarks: numpy array of shape (21, 3)
+            landmarks: numpy array of shape (21, 3).
 
         Returns:
-            Dictionary with finger states (True = extended)
+            Dictionary mapping finger name → ``True`` if extended.
         """
-        def is_extended(tip_idx, pip_idx, mcp_idx):
-            """Check if finger is extended based on landmark positions."""
-            tip = landmarks[tip_idx]
-            pip = landmarks[pip_idx]
-            mcp = landmarks[mcp_idx]
 
-            # Finger is extended if tip is further from wrist than PIP
-            return tip[1] < pip[1]  # Y decreases going up in image
+        def _extended(tip: int, pip: int) -> bool:
+            # A finger is extended when its tip is *above* (lower Y) its PIP
+            return bool(landmarks[tip][1] < landmarks[pip][1])
 
         return {
-            'thumb': is_extended(self.THUMB_TIP, self.THUMB_IP, self.THUMB_MCP),
-            'index': is_extended(self.INDEX_TIP, self.INDEX_PIP, self.INDEX_MCP),
-            'middle': is_extended(self.MIDDLE_TIP, self.MIDDLE_PIP, self.MIDDLE_MCP),
-            'ring': is_extended(self.RING_TIP, self.RING_PIP, self.RING_MCP),
-            'pinky': is_extended(self.PINKY_TIP, self.PINKY_PIP, self.PINKY_MCP)
+            "thumb": _extended(self.THUMB_TIP, self.THUMB_IP),
+            "index": _extended(self.INDEX_TIP, self.INDEX_PIP),
+            "middle": _extended(self.MIDDLE_TIP, self.MIDDLE_PIP),
+            "ring": _extended(self.RING_TIP, self.RING_PIP),
+            "pinky": _extended(self.PINKY_TIP, self.PINKY_PIP),
         }
 
-    def reset(self):
-        """Reset the tracker state."""
-        self._last_results = None
-        self._last_image = None
+    def reset(self) -> None:
+        """Reset the tracker's video timestamp counter."""
+        self._timestamp_ms = 0
 
-    def close(self):
-        """Close the tracker and release resources."""
-        self.hands.close()
-        self._last_results = None
-        self._last_image = None
+    def close(self) -> None:
+        """Close the tracker and release MediaPipe resources."""
+        self._detector.close()
 
-    def __enter__(self):
-        """Context manager entry."""
+    def __enter__(self) -> "HandTracker":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         self.close()
         return False
