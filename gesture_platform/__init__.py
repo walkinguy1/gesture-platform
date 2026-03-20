@@ -9,6 +9,8 @@ from .normalizer import Normalizer
 from .feature_extractor import FeatureExtractor
 from .asl_recognizer import ASLRecognizer
 from .augmentation import DataAugmentor
+from .mlp_model import MLPRecognizer
+from .ensemble import EnsembleRecognizer
 from .config import (
     Config,
     HandTrackerConfig,
@@ -28,6 +30,8 @@ __all__ = [
     "ASLRecognizer",
     # Phase 2 additions
     "DataAugmentor",
+    "MLPRecognizer",
+    "EnsembleRecognizer",
     "AsyncPipeline",
     "PipelineResult",
     # Configuration

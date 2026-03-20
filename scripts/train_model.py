@@ -1,9 +1,19 @@
 """
 ASL Model Training Script
-Trains Random Forest model on ASL alphabet landmarks
+Trains ASL alphabet models (Random Forest or MLP) with optional
+data augmentation and K-fold cross-validation.
 
 Usage:
+    # Train Random Forest (default)
     python scripts/train_model.py --input data/processed --output models/asl_alphabet.pkl
+
+    # Train MLP neural network
+    python scripts/train_model.py --input data/processed --output models/asl_mlp.pkl \\
+        --model-type mlp
+
+    # Train with data augmentation and K-fold cross-validation
+    python scripts/train_model.py --input data/processed --output models/asl_alphabet.pkl \\
+        --augment --augment-factor 5 --cv-folds 5
 
 Reference: PRD Section 8.3.2 (Training Pipeline)
 """
@@ -17,7 +27,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -29,6 +39,8 @@ from sklearn.preprocessing import LabelEncoder
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from gesture_platform.normalizer import Normalizer
 from gesture_platform.feature_extractor import FeatureExtractor
+from gesture_platform.augmentation import DataAugmentor
+from gesture_platform.mlp_model import MLPRecognizer
 
 
 def parse_args():
@@ -49,16 +61,35 @@ def parse_args():
         help='Output path for trained model'
     )
     parser.add_argument(
+        '--model-type',
+        type=str,
+        default='random_forest',
+        choices=['random_forest', 'mlp'],
+        help='Model architecture to train (default: random_forest)'
+    )
+    parser.add_argument(
         '--n-estimators',
         type=int,
         default=200,
-        help='Number of trees in Random Forest'
+        help='Number of trees in Random Forest (ignored for mlp)'
     )
     parser.add_argument(
         '--max-depth',
         type=int,
         default=30,
-        help='Maximum depth of trees'
+        help='Maximum depth of trees (ignored for mlp)'
+    )
+    parser.add_argument(
+        '--mlp-hidden-layers',
+        type=str,
+        default='256,128',
+        help='Comma-separated hidden layer sizes for MLP, e.g. "256,128"'
+    )
+    parser.add_argument(
+        '--mlp-max-iter',
+        type=int,
+        default=500,
+        help='Maximum training iterations for MLP (ignored for random_forest)'
     )
     parser.add_argument(
         '--test-size',
@@ -75,7 +106,30 @@ def parse_args():
         '--cv-folds',
         type=int,
         default=5,
-        help='Number of cross-validation folds'
+        help='Number of cross-validation folds (0 to skip)'
+    )
+    parser.add_argument(
+        '--augment',
+        action='store_true',
+        help='Apply data augmentation to training set'
+    )
+    parser.add_argument(
+        '--augment-factor',
+        type=int,
+        default=5,
+        help='Augmented copies per original sample (used with --augment)'
+    )
+    parser.add_argument(
+        '--augment-rotation',
+        type=float,
+        default=15.0,
+        help='Max rotation in degrees for augmentation'
+    )
+    parser.add_argument(
+        '--augment-noise',
+        type=float,
+        default=0.005,
+        help='Gaussian noise std for augmentation'
     )
     parser.add_argument(
         '--random-seed',
@@ -181,7 +235,65 @@ def load_individual_files(data_dir: Path):
     return np.array(features), np.array(labels), sorted(list(classes))
 
 
-def train_model(
+def augment_training_data(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    feature_extractor: FeatureExtractor,
+    num_augmentations: int = 5,
+    rotation_range: float = 15.0,
+    noise_std: float = 0.005,
+    random_seed: int = 42
+):
+    """
+    Apply data augmentation to raw landmark features.
+
+    Augmentation is applied in landmark space when the input feature
+    dimension is 63 (21 landmarks × 3 coordinates); otherwise the
+    original data is returned unchanged.
+
+    Args:
+        X_train: Training features of shape (n_samples, n_features).
+        y_train: Corresponding labels.
+        feature_extractor: Used to re-extract features from augmented landmarks.
+        num_augmentations: Number of augmented copies per sample.
+        rotation_range: Max rotation in degrees.
+        noise_std: Gaussian noise standard deviation.
+        random_seed: Random seed for the augmentor.
+
+    Returns:
+        Tuple of augmented (X_train, y_train).
+    """
+    n_features = X_train.shape[1]
+    # Only augment if features are raw landmark coordinates (21*3 = 63)
+    if n_features != 63:
+        print("Skipping augmentation: feature dimension is not 63 (raw landmarks).")
+        return X_train, y_train
+
+    augmentor = DataAugmentor(
+        rotation_range=rotation_range,
+        noise_std=noise_std,
+        seed=random_seed,
+    )
+
+    X_aug_list = [X_train]
+    y_aug_list = [y_train]
+
+    print(f"Augmenting training data ({num_augmentations}× per sample)...")
+    for i in tqdm(range(len(X_train))):
+        lm = X_train[i].reshape(21, 3)
+        augmented = augmentor.augment(lm, num_augmentations=num_augmentations)[1:]
+        for aug_lm in augmented:
+            feat = feature_extractor.extract_static(aug_lm)
+            X_aug_list.append(feat.reshape(1, -1))
+            y_aug_list.append(np.array([y_train[i]]))
+
+    X_augmented = np.vstack(X_aug_list)
+    y_augmented = np.concatenate(y_aug_list)
+    print(f"  Original samples: {len(X_train)} → Augmented: {len(X_augmented)}")
+    return X_augmented, y_augmented
+
+
+def train_random_forest(
     X_train: np.ndarray,
     y_train: np.ndarray,
     n_estimators: int = 200,
@@ -199,7 +311,7 @@ def train_model(
         random_seed: Random seed
 
     Returns:
-        Trained model
+        Trained RandomForestClassifier
     """
     print(f"\nTraining Random Forest with {n_estimators} trees...")
 
@@ -218,6 +330,136 @@ def train_model(
     return model
 
 
+def train_mlp(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    hidden_layer_sizes: tuple = (256, 128),
+    max_iter: int = 500,
+    random_seed: int = 42
+):
+    """
+    Train MLP neural network model.
+
+    Args:
+        X_train: Training features
+        y_train: Training labels
+        hidden_layer_sizes: Hidden layer architecture
+        max_iter: Maximum training iterations
+        random_seed: Random seed
+
+    Returns:
+        Trained MLPRecognizer
+    """
+    print(f"\nTraining MLP with layers {hidden_layer_sizes}...")
+
+    recognizer = MLPRecognizer(
+        hidden_layer_sizes=hidden_layer_sizes,
+        max_iter=max_iter,
+        random_state=random_seed,
+        verbose=True,
+    )
+    recognizer.train(X_train, y_train, verbose=True)
+    return recognizer
+
+
+# Keep the original train_model name as an alias for backwards compatibility
+def train_model(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    n_estimators: int = 200,
+    max_depth: int = 30,
+    random_seed: int = 42
+):
+    """
+    Train Random Forest model (backwards-compatible wrapper).
+
+    Args:
+        X_train: Training features
+        y_train: Training labels
+        n_estimators: Number of trees
+        max_depth: Maximum tree depth
+        random_seed: Random seed
+
+    Returns:
+        Trained model
+    """
+    return train_random_forest(
+        X_train, y_train,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        random_seed=random_seed,
+    )
+
+
+def run_cross_validation(
+    X: np.ndarray,
+    y: np.ndarray,
+    model_type: str,
+    cv_folds: int = 5,
+    random_seed: int = 42,
+    n_estimators: int = 200,
+    max_depth: int = 30,
+    hidden_layer_sizes: tuple = (256, 128),
+    max_iter: int = 500,
+):
+    """
+    Run stratified K-fold cross-validation and report mean ± std accuracy.
+
+    Args:
+        X: Full feature matrix.
+        y: Full label array.
+        model_type: ``'random_forest'`` or ``'mlp'``.
+        cv_folds: Number of folds.
+        random_seed: Random seed.
+        n_estimators: Trees for Random Forest.
+        max_depth: Depth for Random Forest.
+        hidden_layer_sizes: Architecture for MLP.
+        max_iter: Max iterations for MLP.
+
+    Returns:
+        Dict with 'mean_accuracy' and 'std_accuracy'.
+    """
+    print(f"\nRunning {cv_folds}-fold cross-validation (model_type={model_type})...")
+
+    skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_seed)
+    fold_accuracies = []
+
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+        X_tr, X_val = X[train_idx], X[val_idx]
+        y_tr, y_val = y[train_idx], y[val_idx]
+
+        if model_type == 'mlp':
+            recognizer = MLPRecognizer(
+                hidden_layer_sizes=hidden_layer_sizes,
+                max_iter=max_iter,
+                random_state=random_seed,
+            )
+            recognizer.train(X_tr, y_tr, verbose=False)
+            # Evaluate using predict_batch
+            results = recognizer.predict_batch(X_val)
+            y_pred = [cls if cls is not None else '__none__' for cls, _ in results]
+        else:
+            clf = RandomForestClassifier(
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                min_samples_split=5,
+                random_state=random_seed,
+                n_jobs=-1,
+            )
+            clf.fit(X_tr, y_tr)
+            y_pred = clf.predict(X_val)
+
+        acc = accuracy_score(y_val, y_pred)
+        fold_accuracies.append(acc)
+        print(f"  Fold {fold}/{cv_folds}: {acc:.4f} ({acc*100:.2f}%)")
+
+    mean_acc = float(np.mean(fold_accuracies))
+    std_acc = float(np.std(fold_accuracies))
+    print(f"\nCV Result: {mean_acc:.4f} ± {std_acc:.4f}  "
+          f"({mean_acc*100:.2f}% ± {std_acc*100:.2f}%)")
+    return {'mean_accuracy': mean_acc, 'std_accuracy': std_acc}
+
+
 def evaluate_model(
     model,
     X_test: np.ndarray,
@@ -229,11 +471,11 @@ def evaluate_model(
     Evaluate model performance.
 
     Args:
-        model: Trained model
+        model: Trained model (RandomForestClassifier or MLPRecognizer)
         X_test: Test features
         y_test: Test labels
         class_names: List of class names
-        cv_folds: Number of CV folds
+        cv_folds: Number of CV folds (informational only; CV is run separately)
 
     Returns:
         Dictionary of metrics
@@ -242,8 +484,13 @@ def evaluate_model(
     print("MODEL EVALUATION")
     print("="*50)
 
-    # Test set predictions
-    y_pred = model.predict(X_test)
+    # Support both RandomForestClassifier and MLPRecognizer interfaces
+    if isinstance(model, MLPRecognizer):
+        results = model.predict_batch(X_test)
+        y_pred = [cls if cls is not None else '__none__' for cls, _ in results]
+    else:
+        y_pred = model.predict(X_test)
+
     accuracy = accuracy_score(y_test, y_pred)
 
     print(f"\nTest Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
@@ -256,10 +503,13 @@ def evaluate_model(
     cm = confusion_matrix(y_test, y_pred)
     print(f"Confusion Matrix Shape: {cm.shape}")
 
-    # Cross-validation
-    print(f"\nCross-Validation ({cv_folds}-fold):")
-    # Note: CV is done on training data, not test
-    # This is just informational since we already split
+    # Highlight most-confused pairs
+    np.fill_diagonal(cm, 0)
+    confused_indices = np.unravel_index(np.argsort(cm, axis=None)[::-1][:5], cm.shape)
+    print("\nTop confused letter pairs:")
+    for i, j in zip(confused_indices[0], confused_indices[1]):
+        if cm[i, j] > 0:
+            print(f"  {class_names[i]} → {class_names[j]}: {cm[i, j]} errors")
 
     metrics = {
         'accuracy': accuracy,
@@ -274,7 +524,8 @@ def save_model(
     model,
     class_names: list,
     output_path: str,
-    accuracy: float = None
+    accuracy: float = None,
+    model_type: str = 'RandomForest'
 ):
     """
     Save trained model.
@@ -284,26 +535,32 @@ def save_model(
         class_names: List of class names
         output_path: Output file path
         accuracy: Optional accuracy for metadata
+        model_type: Model type string for metadata
     """
-    # Create output directory
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save model with metadata
-    model_data = {
-        'model': model,
-        'classes': class_names,
-        'version': '1.0',
-        'accuracy': accuracy,
-        'model_type': 'RandomForest'
-    }
-
-    with open(output_file, 'wb') as f:
-        pickle.dump(model_data, f)
+    if isinstance(model, MLPRecognizer):
+        # MLPRecognizer has its own save method that stores the scaler too
+        model.save(output_path)
+        # Patch metadata into the saved file
+        with open(output_file, 'rb') as f:
+            data = pickle.load(f)
+        data['accuracy'] = accuracy
+        with open(output_file, 'wb') as f:
+            pickle.dump(data, f)
+    else:
+        model_data = {
+            'model': model,
+            'classes': class_names,
+            'version': '2.0',
+            'accuracy': accuracy,
+            'model_type': model_type,
+        }
+        with open(output_file, 'wb') as f:
+            pickle.dump(model_data, f)
 
     print(f"\nModel saved to {output_file}")
-
-    # Print file size
     file_size = output_file.stat().st_size
     print(f"Model size: {file_size / (1024*1024):.2f} MB")
 
@@ -315,11 +572,18 @@ def main():
     print("="*50)
     print("ASL Model Training")
     print("="*50)
-    print(f"Input: {args.input}")
-    print(f"Output: {args.output}")
-    print(f"Estimators: {args.n_estimators}")
-    print(f"Max depth: {args.max_depth}")
-    print(f"Test size: {args.test_size}")
+    print(f"Input:       {args.input}")
+    print(f"Output:      {args.output}")
+    print(f"Model type:  {args.model_type}")
+    if args.model_type == 'random_forest':
+        print(f"Estimators:  {args.n_estimators}")
+        print(f"Max depth:   {args.max_depth}")
+    else:
+        print(f"MLP layers:  {args.mlp_hidden_layers}")
+        print(f"Max iter:    {args.mlp_max_iter}")
+    print(f"Test size:   {args.test_size}")
+    print(f"CV folds:    {args.cv_folds}")
+    print(f"Augment:     {args.augment}")
     print()
 
     # Set random seed
@@ -330,10 +594,26 @@ def main():
     X, y, class_names = load_dataset(args.input)
 
     print(f"\nDataset loaded:")
-    print(f"  Total samples: {len(X)}")
+    print(f"  Total samples:    {len(X)}")
     print(f"  Feature dimension: {X.shape[1]}")
     print(f"  Number of classes: {len(class_names)}")
     print(f"  Classes: {class_names}")
+
+    # Optional K-fold cross-validation (on the full dataset before splitting)
+    cv_results = None
+    if args.cv_folds > 1:
+        # Parse MLP hidden layers
+        mlp_layers = tuple(int(x) for x in args.mlp_hidden_layers.split(','))
+        cv_results = run_cross_validation(
+            X, y,
+            model_type=args.model_type,
+            cv_folds=args.cv_folds,
+            random_seed=args.random_seed,
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            hidden_layer_sizes=mlp_layers,
+            max_iter=args.mlp_max_iter,
+        )
 
     # Split data
     print(f"\nSplitting data (test={args.test_size})...")
@@ -345,15 +625,36 @@ def main():
     )
 
     print(f"  Training samples: {len(X_train)}")
-    print(f"  Test samples: {len(X_test)}")
+    print(f"  Test samples:     {len(X_test)}")
+
+    # Optional data augmentation (only on training split)
+    feature_extractor = FeatureExtractor()
+    if args.augment:
+        X_train, y_train = augment_training_data(
+            X_train, y_train,
+            feature_extractor=feature_extractor,
+            num_augmentations=args.augment_factor,
+            rotation_range=args.augment_rotation,
+            noise_std=args.augment_noise,
+            random_seed=args.random_seed,
+        )
 
     # Train model
-    model = train_model(
-        X_train, y_train,
-        n_estimators=args.n_estimators,
-        max_depth=args.max_depth,
-        random_seed=args.random_seed
-    )
+    mlp_layers = tuple(int(x) for x in args.mlp_hidden_layers.split(','))
+    if args.model_type == 'mlp':
+        model = train_mlp(
+            X_train, y_train,
+            hidden_layer_sizes=mlp_layers,
+            max_iter=args.mlp_max_iter,
+            random_seed=args.random_seed,
+        )
+    else:
+        model = train_random_forest(
+            X_train, y_train,
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            random_seed=args.random_seed,
+        )
 
     # Evaluate model
     metrics = evaluate_model(
@@ -365,12 +666,19 @@ def main():
         model,
         class_names,
         args.output,
-        accuracy=metrics['accuracy']
+        accuracy=metrics['accuracy'],
+        model_type=args.model_type,
     )
 
     print("\n" + "="*50)
     print("TRAINING COMPLETE")
     print("="*50)
+
+    if cv_results:
+        print(
+            f"CV Accuracy: {cv_results['mean_accuracy']*100:.2f}% "
+            f"± {cv_results['std_accuracy']*100:.2f}%"
+        )
 
     # Print target accuracy check
     if metrics['accuracy'] >= 0.95:
@@ -378,10 +686,15 @@ def main():
     else:
         print(f"✗ Target not met: {metrics['accuracy']*100:.2f}% < 95%")
         print("  Suggestions:")
-        print("  - Increase n_estimators (e.g., 500)")
+        if args.model_type == 'random_forest':
+            print("  - Increase n_estimators (e.g., 500)")
+            print("  - Increase max_depth")
+            print("  - Try --model-type mlp")
+        else:
+            print("  - Increase --mlp-max-iter")
+            print("  - Try larger hidden layers, e.g. --mlp-hidden-layers 512,256,128")
         print("  - Add more training data")
-        print("  - Try data augmentation")
-        print("  - Increase max_depth")
+        print("  - Use --augment to enable data augmentation")
 
 
 if __name__ == '__main__':
