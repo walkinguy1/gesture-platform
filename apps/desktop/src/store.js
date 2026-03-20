@@ -25,6 +25,8 @@ interface AppState {
     smoothingEnabled: boolean
     showLandmarks: boolean
     languageModel: 'ASL' | 'BSL'
+    theme: 'dark' | 'light'
+    cameraIndex: number
   }
 
   // Actions
@@ -58,7 +60,9 @@ export const useStore = create<AppState>()(
         confidenceThreshold: 0.7,
         smoothingEnabled: true,
         showLandmarks: true,
-        languageModel: 'ASL'
+        languageModel: 'ASL',
+        theme: 'dark',
+        cameraIndex: 0
       },
 
       // Actions
