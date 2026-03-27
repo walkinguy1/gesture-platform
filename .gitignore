@@ -54,7 +54,7 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Data files (CRITICAL: Don't upload datasets to Git)
+# Data files
 data/raw/
 data/asl_alphabet/
 data/*.npz

@@ -11,9 +11,9 @@ Priority: HIGH (Phase 2 – Accuracy Improvements)
 
 import logging
 import pickle
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 import numpy as np
 from sklearn.neural_network import MLPClassifier
@@ -62,7 +62,7 @@ class MLPRecognizer:
         self._scaler: Optional[StandardScaler] = None
         self._label_encoder: Optional[LabelEncoder] = None
         self._classes: List[str] = []
-        self._prediction_buffer: List[Tuple[str, float]] = []
+        self._prediction_buffer: Deque[Tuple[str, float]] = deque(maxlen=smoothing_window)
 
     # ------------------------------------------------------------------
     # Training
@@ -108,6 +108,15 @@ class MLPRecognizer:
         logger.info("MLPRecognizer trained. Iterations: %d", self._model.n_iter_)
         return self
 
+    def _decode_class_index(self, best_idx: int) -> str:
+        """Decode model class index to original string label."""
+        if self._model is None:
+            raise RuntimeError("Model not trained/loaded.")
+        class_id = self._model.classes_[best_idx]
+        if self._label_encoder is not None:
+            return str(self._label_encoder.inverse_transform([class_id])[0])
+        return str(class_id)
+
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
@@ -142,13 +151,7 @@ class MLPRecognizer:
         best_idx = int(np.argmax(probs))
         confidence = float(probs[best_idx])
 
-        # Decode integer class back to string label
-        if self._label_encoder is not None:
-            predicted_class: str = self._label_encoder.inverse_transform(
-                [self._model.classes_[best_idx]]
-            )[0]
-        else:
-            predicted_class = str(self._model.classes_[best_idx])
+        predicted_class = self._decode_class_index(best_idx)
 
         if confidence < self.confidence_threshold:
             return None, confidence
@@ -177,8 +180,6 @@ class MLPRecognizer:
             return None, confidence
 
         self._prediction_buffer.append((predicted_class, confidence))
-        if len(self._prediction_buffer) > self.smoothing_window:
-            self._prediction_buffer.pop(0)
 
         if len(self._prediction_buffer) >= 3:
             preds = [p for p, _ in self._prediction_buffer]
@@ -213,12 +214,7 @@ class MLPRecognizer:
             best_idx = int(np.argmax(probs))
             conf = float(probs[best_idx])
             if conf >= self.confidence_threshold:
-                if self._label_encoder is not None:
-                    decoded: Optional[str] = self._label_encoder.inverse_transform(
-                        [self._model.classes_[best_idx]]
-                    )[0]
-                else:
-                    decoded = str(self._model.classes_[best_idx])
+                decoded: Optional[str] = self._decode_class_index(best_idx)
             else:
                 decoded = None
             results.append((decoded, conf))

@@ -1,9 +1,9 @@
 """
 Data Preprocessing Script
-Converts ASL alphabet images to normalized landmarks
+Converts image datasets (ASL, NSL, or custom sign-language classes) to landmark samples.
 
 Usage:
-    python scripts/preprocess_dataset.py --input data/asl_alphabet --output data/processed
+    python scripts/preprocess_dataset.py --input data/raw/custom --output data/processed/custom
 
 Reference: PRD Section 8.3.2 (Training Pipeline)
 """
@@ -11,18 +11,21 @@ Reference: PRD Section 8.3.2 (Training Pipeline)
 import os
 import sys
 import argparse
+import json
 import numpy as np
 import cv2
 from pathlib import Path
 from tqdm import tqdm
 import mediapipe as mp
 import pickle
+from datetime import datetime
+from typing import List, Optional
 
 
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Preprocess ASL alphabet dataset'
+        description='Preprocess sign-language image dataset into landmark samples'
     )
     parser.add_argument(
         '--input',
@@ -53,12 +56,36 @@ def parse_args():
         action='store_true',
         help='Skip samples that already exist in output'
     )
+    parser.add_argument(
+        '--language-code',
+        type=str,
+        default='ASL',
+        help='Language code (e.g., ASL, NSL, BSL, ISL)'
+    )
+    parser.add_argument(
+        '--language-name',
+        type=str,
+        default='American Sign Language',
+        help='Human-friendly language name'
+    )
+    parser.add_argument(
+        '--dataset-name',
+        type=str,
+        default='custom-sign-dataset',
+        help='Dataset name for manifest metadata'
+    )
+    parser.add_argument(
+        '--classes-file',
+        type=str,
+        default=None,
+        help='Optional path to .txt or .json class list to restrict processed classes'
+    )
 
     return parser.parse_args()
 
 
 class DatasetPreprocessor:
-    """Preprocesses ASL alphabet images to landmarks."""
+    """Preprocesses sign-language images to landmarks."""
 
     def __init__(self, image_size: int = 640):
         """
@@ -98,10 +125,21 @@ class DatasetPreprocessor:
         Returns:
             Tuple of (landmarks, handedness) or (None, None) on failure
         """
+        self.stats['total'] += 1
+
         # Read image
         image = cv2.imread(image_path)
         if image is None:
             return None, None
+
+        # Resize while preserving aspect ratio (improves detector consistency and speed)
+        h, w = image.shape[:2]
+        max_side = max(h, w)
+        if max_side > self.image_size:
+            scale = self.image_size / float(max_side)
+            new_w = max(1, int(w * scale))
+            new_h = max(1, int(h * scale))
+            image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
         # Convert to RGB
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -137,7 +175,11 @@ class DatasetPreprocessor:
         input_dir: str,
         output_dir: str,
         max_samples: int = None,
-        skip_existing: bool = False
+        skip_existing: bool = False,
+        allowed_classes: Optional[List[str]] = None,
+        language_code: str = 'ASL',
+        language_name: str = 'American Sign Language',
+        dataset_name: str = 'custom-sign-dataset',
     ):
         """
         Process all images in a directory.
@@ -155,6 +197,11 @@ class DatasetPreprocessor:
         # Get class directories
         class_dirs = [d for d in input_path.iterdir() if d.is_dir()]
         class_dirs.sort()
+
+        if allowed_classes:
+            allowed = {name.strip() for name in allowed_classes if name.strip()}
+            class_dirs = [d for d in class_dirs if d.name in allowed]
+            print(f"Filtered to {len(class_dirs)} classes from classes-file")
 
         print(f"Found {len(class_dirs)} classes")
 
@@ -217,6 +264,29 @@ class DatasetPreprocessor:
         with open(combined_file, 'wb') as f:
             pickle.dump(all_data, f)
 
+        # Save manifest for downstream training and reproducibility
+        manifest = {
+            'dataset_name': dataset_name,
+            'language_code': language_code.upper(),
+            'language_name': language_name,
+            'created_at': datetime.utcnow().isoformat() + 'Z',
+            'input_dir': str(input_path.resolve()),
+            'output_dir': str(output_path.resolve()),
+            'n_classes': len(all_data),
+            'classes': sorted(all_data.keys()),
+            'n_samples': int(sum(len(samples) for samples in all_data.values())),
+            'stats': self.stats,
+            'format': {
+                'sample_fields': ['landmarks', 'handedness', 'image_path', 'class'],
+                'landmarks_shape': [21, 3],
+                'combined_file': 'combined_data.pkl'
+            }
+        }
+        manifest_file = output_path / 'dataset_manifest.json'
+        with open(manifest_file, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, indent=2)
+        print(f"Manifest saved to: {manifest_file}")
+
         # Print statistics
         print("\n" + "="*50)
         print("PREPROCESSING COMPLETE")
@@ -238,12 +308,32 @@ def main():
     """Main function."""
     args = parse_args()
 
+    allowed_classes = None
+    if args.classes_file:
+        classes_file = Path(args.classes_file)
+        if not classes_file.exists():
+            raise FileNotFoundError(f"Classes file not found: {classes_file}")
+
+        if classes_file.suffix.lower() == '.json':
+            with open(classes_file, 'r', encoding='utf-8') as f:
+                classes_data = json.load(f)
+                if not isinstance(classes_data, list):
+                    raise ValueError("JSON classes file must be a list of class names")
+                allowed_classes = [str(item) for item in classes_data]
+        else:
+            with open(classes_file, 'r', encoding='utf-8') as f:
+                allowed_classes = [line.strip() for line in f if line.strip()]
+
     print("="*50)
-    print("ASL Dataset Preprocessor")
+    print("Sign-Language Dataset Preprocessor")
     print("="*50)
     print(f"Input: {args.input}")
     print(f"Output: {args.output}")
+    print(f"Language: {args.language_code.upper()} ({args.language_name})")
+    print(f"Dataset name: {args.dataset_name}")
     print(f"Max samples per class: {args.max_samples}")
+    if allowed_classes is not None:
+        print(f"Class filter enabled: {len(allowed_classes)} classes")
     print()
 
     # Create preprocessor
@@ -255,7 +345,11 @@ def main():
             args.input,
             args.output,
             max_samples=args.max_samples,
-            skip_existing=args.skip_existing
+            skip_existing=args.skip_existing,
+            allowed_classes=allowed_classes,
+            language_code=args.language_code,
+            language_name=args.language_name,
+            dataset_name=args.dataset_name,
         )
     finally:
         preprocessor.close()
