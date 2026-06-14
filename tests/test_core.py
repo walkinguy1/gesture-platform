@@ -262,10 +262,7 @@ class TestFeatureExtractor:
 
     def test_extract_with_velocity(self):
         """Test extraction with velocity."""
-        extractor = FeatureExtractor(
-            include_velocity=True,
-            include_acceleration=False
-        )
+        extractor = FeatureExtractor(include_velocity=True)
 
         landmarks1 = np.random.rand(21, 3)
         landmarks2 = landmarks1 + 0.1

@@ -27,6 +27,7 @@ from .asl_recognizer import ASLRecognizer
 from .feature_extractor import FeatureExtractor
 from .hand_tracker import HandTracker
 from .normalizer import Normalizer
+from .performance_monitor import PerformanceMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,9 @@ class AsyncPipeline:
         self._frame_count: int = 0
         self._fps_start: float = 0.0
 
+        # Performance monitoring
+        self._perf_monitor = PerformanceMonitor(enabled=True)
+
         # Threads
         self._capture_thread: Optional[threading.Thread] = None
         self._detection_thread: Optional[threading.Thread] = None
@@ -243,6 +247,19 @@ class AsyncPipeline:
     def is_running(self) -> bool:
         return self._running
 
+    def get_performance_report(self) -> Dict[str, Dict]:
+        """
+        Get performance monitoring report.
+
+        Returns:
+            Dictionary with timing statistics for all operations
+        """
+        return self._perf_monitor.get_report()
+
+    def print_performance_summary(self) -> None:
+        """Print a summary of performance statistics."""
+        self._perf_monitor.print_summary()
+
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
@@ -260,21 +277,47 @@ class AsyncPipeline:
     # ------------------------------------------------------------------
 
     def _open_camera(self) -> bool:
-        self._cap = cv2.VideoCapture(self.camera_index)
-        if not self._cap.isOpened():
-            logger.error("Could not open camera %d.", self.camera_index)
-            return False
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
-        # Request minimal buffering to reduce latency
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        logger.debug(
-            "Camera %d opened at %dx%d.",
-            self.camera_index,
-            int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        )
-        return True
+        """Open camera with improved error handling and retry logic."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            self._cap = cv2.VideoCapture(self.camera_index)
+            if not self._cap.isOpened():
+                logger.warning("Attempt %d: Could not open camera %d.", attempt + 1, self.camera_index)
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                logger.error("Failed to open camera %d after %d attempts.", self.camera_index, max_retries)
+                return False
+
+            # Set camera properties
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            # Verify camera is actually returning frames
+            ret, test_frame = self._cap.read()
+            if not ret or test_frame is None:
+                logger.warning("Attempt %d: Camera opened but not returning frames.", attempt + 1)
+                self._cap.release()
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                logger.error("Camera %d not returning frames after %d attempts.", self.camera_index, max_retries)
+                return False
+
+            actual_width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            logger.debug(
+                "Camera %d opened at %dx%d (requested %dx%d).",
+                self.camera_index,
+                actual_width,
+                actual_height,
+                self.frame_width,
+                self.frame_height,
+            )
+            return True
+
+        return False
 
     def _init_components(self) -> None:
         self._tracker = HandTracker(
@@ -294,18 +337,35 @@ class AsyncPipeline:
     # ------------------------------------------------------------------
 
     def _capture_worker(self) -> None:
-        """Thread 1: Read frames from camera as fast as possible."""
+        """Thread 1: Read frames from camera as fast as possible with error recovery."""
         logger.debug("Capture thread started.")
+        consecutive_failures = 0
+        max_failures = 10
+
         while self._running:
             if self._cap is None or not self._cap.isOpened():
                 time.sleep(0.01)
                 continue
 
             ret, frame = self._cap.read()
-            if not ret:
-                logger.warning("Failed to read frame from camera.")
+            if not ret or frame is None:
+                consecutive_failures += 1
+                logger.warning("Failed to read frame from camera (failure %d/%d).", consecutive_failures, max_failures)
+
+                if consecutive_failures >= max_failures:
+                    logger.error("Too many consecutive frame read failures. Attempting camera re-initialization.")
+                    self._cap.release()
+                    if self._open_camera():
+                        consecutive_failures = 0
+                        logger.info("Camera re-initialized successfully.")
+                    else:
+                        logger.error("Failed to re-initialize camera. Stopping capture thread.")
+                        break
+
                 time.sleep(0.01)
                 continue
+
+            consecutive_failures = 0
 
             # Mirror horizontally
             frame = cv2.flip(frame, 1)
@@ -332,7 +392,8 @@ class AsyncPipeline:
                 continue
 
             try:
-                hands = self._tracker.process(frame)  # type: ignore[union-attr]
+                with self._perf_monitor.time("hand_detection"):
+                    hands = self._tracker.process(frame)  # type: ignore[union-attr]
             except Exception:
                 logger.exception("Error in hand detection.")
                 hands = []
@@ -356,13 +417,18 @@ class AsyncPipeline:
                 landmarks = hand["landmarks"]
 
                 try:
-                    normalized = self._normalizer.normalize(landmarks)  # type: ignore[union-attr]
-                    features = self._extractor.extract_static(normalized)  # type: ignore[union-attr]
+                    with self._perf_monitor.time("normalization"):
+                        normalized = self._normalizer.normalize(landmarks)  # type: ignore[union-attr]
+
+                    with self._perf_monitor.time("feature_extraction"):
+                        features = self._extractor.extract_static(normalized)  # type: ignore[union-attr]
 
                     if self.use_smoothing:
-                        pred, conf = self._recognizer.predict_with_smoothing(features)  # type: ignore[union-attr]
+                        with self._perf_monitor.time("inference_smoothed"):
+                            pred, conf = self._recognizer.predict_with_smoothing(features)  # type: ignore[union-attr]
                     else:
-                        pred, conf = self._recognizer.predict(features)  # type: ignore[union-attr]
+                        with self._perf_monitor.time("inference"):
+                            pred, conf = self._recognizer.predict(features)  # type: ignore[union-attr]
                 except Exception:
                     logger.exception("Error in model inference.")
                     pred, conf = None, 0.0

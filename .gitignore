@@ -94,6 +94,29 @@ htmlcov/
 *.tmp
 *.temp
 
+# Node.js / React / Tauri
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+.pnpm-debug.log*
+dist/
+dist-ssr/
+*.local
+.next/
+.nuxt/
+.vuepress/dist/
+.server/
+.client/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/Cargo.lock
+.windsurf/
+
+# MediaPipe model cache
+~/.gesture_platform/
+
 # Exceptions (files you DO want to track)
 !models/.gitkeep
 !data/.gitkeep

@@ -2,7 +2,100 @@
 
 This guide explains how to use Gesture Platform end-to-end, including creating your own sign-language datasets (NSL, BSL, ISL, custom regional signs), preprocessing, training, and inference.
 
-## 1) Setup
+## Table of Contents
+
+1. [Desktop Application Usage](#desktop-application-usage)
+2. [Python API & Dataset Workflow](#python-api--dataset-workflow)
+3. [Setup](#setup)
+4. [Create a Custom Dataset Scaffold](#create-a-custom-dataset-scaffold)
+5. [Add Images](#add-images)
+6. [Preprocess into Landmark Dataset](#preprocess-into-landmark-dataset)
+7. [Train a Model](#train-a-model)
+8. [Run Real-Time Recognition](#run-real-time-recognition)
+9. [Register New Language in Runtime Registry](#register-new-language-in-runtime-registry)
+10. [Use Error Handling in Production](#use-error-handling-in-production)
+11. [Validation / Tests](#validation--tests)
+12. [Recommended Enhancement Workflow](#recommended-enhancement-workflow)
+
+---
+
+## Desktop Application Usage
+
+The Gesture Platform includes a modern desktop application with a unified design system and intuitive navigation.
+
+### Features
+
+- **Dashboard**: Overview of progress, streak, calibration status, and letter mastery grid
+- **Practice Mode**: Guided practice for ASL alphabet with real-time feedback
+- **Live Captions**: Real-time sign-to-text captioning
+- **Calibration**: Hand tracking calibration for improved accuracy
+- **Settings**: Unified configuration panel for all app settings
+
+### Navigation
+
+The app uses a sidebar navigation with keyboard shortcuts:
+- `D` - Dashboard
+- `P` - Practice Mode
+- `L` - Live Captions
+- `C` - Calibration
+- `S` - Settings
+- `Escape` - Return to Dashboard
+
+### Component Library
+
+The desktop app uses a unified component library for consistent UI:
+
+- **Panel**: Reusable container for grouped content sections
+- **StatRow**: Display label-value pairs for statistics
+- **Card**: Feature highlights and navigation options
+- **ProgressBar**: Visual progress indicators
+- **ToggleRow**: Toggle switches with labels
+- **Button**: Consistent button styling
+
+### State Management
+
+The app uses Zustand for state management with a consolidated structure:
+
+```javascript
+{
+  settings: {
+    theme: 'dark',
+    cameraIndex: 0,
+    confidenceThreshold: 0.7,
+    smoothingEnabled: true,
+    showLandmarks: true
+  },
+  calibration: {
+    isCalibrated: false,
+    handSize: null
+  },
+  progress: {
+    letters: [],
+    streak: 0,
+    totalTime: 0
+  },
+  realtime: {
+    prediction: null,
+    confidence: 0
+  }
+}
+```
+
+### Running the Desktop App
+
+```bash
+cd apps/desktop
+npm install
+npm start
+```
+
+The app will open in your default browser at `http://localhost:3000`.
+
+---
+
+## Python API & Dataset Workflow
+
+### 3) Setup
 
 ```bash
 python -m venv venv
@@ -11,7 +104,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-## 2) Create a Custom Dataset Scaffold
+### 4) Create a Custom Dataset Scaffold
 
 Use the bootstrap script to generate a clean dataset structure and class templates.
 
@@ -33,7 +126,7 @@ You can also provide your own classes:
 python scripts\init_custom_dataset.py --root data\raw\custom --language-code CSL --language-name "Custom Sign Language" --classes HELLO THANK_YOU YES NO
 ```
 
-## 3) Add Images
+### 5) Add Images
 
 Place images in each class folder:
 
@@ -54,7 +147,7 @@ Tips:
 - Use consistent label naming.
 - Aim for balanced samples across classes.
 
-## 4) Preprocess into Landmark Dataset
+### 6) Preprocess into Landmark Dataset
 
 Convert image folders to MediaPipe landmarks + a dataset manifest.
 
@@ -74,7 +167,7 @@ Output includes:
 - `combined_data.pkl`
 - `dataset_manifest.json` (language, classes, counts, stats)
 
-## 5) Train a Model
+### 7) Train a Model
 
 Random Forest:
 
@@ -90,13 +183,13 @@ python scripts\train_model.py --input data\processed\nsl --output models\nsl_mlp
 
 Training automatically reads `dataset_manifest.json` if present and stores metadata into model output (language code/name + dataset name + timestamp).
 
-## 6) Run Real-Time Recognition
+### 8) Run Real-Time Recognition
 
 ```bash
 python scripts\realtime_demo.py --model models\nsl_rf.pkl --smoothing --show-landmarks --threshold 0.70
 ```
 
-## 7) Register New Language in Runtime Registry
+### 9) Register New Language in Runtime Registry
 
 If you want app-level language tracking and symbol validation:
 
@@ -120,7 +213,7 @@ registry.track_prediction("HELLO", 0.92, code="NSL")
 print(registry.get_language_statistics("NSL"))
 ```
 
-## 8) Use Error Handling in Production
+### 10) Use Error Handling in Production
 
 ```python
 from gesture_platform import (
@@ -144,13 +237,13 @@ except PredictionError as err:
     print(f"Inference failed: {err}")
 ```
 
-## 9) Validation / Tests
+### 11) Validation / Tests
 
 ```bash
 python -m pytest tests\test_core.py tests\test_phase2.py tests\test_phase3.py tests\test_phase4_comprehensive.py -v
 ```
 
-## 10) Recommended Enhancement Workflow
+### 12) Recommended Enhancement Workflow
 
 For every new language/version:
 

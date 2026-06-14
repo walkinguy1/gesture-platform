@@ -228,7 +228,7 @@ def load_individual_files(data_dir: Path):
 def _extract_dataset_from_samples(items):
     """Normalize and extract static features from class/sample items."""
     normalizer = Normalizer()
-    feature_extractor = FeatureExtractor(include_velocity=False, include_acceleration=False)
+    feature_extractor = FeatureExtractor(include_velocity=False)
     features = []
     labels = []
     classes = set()

@@ -15,7 +15,7 @@ Reference: PRD Section FR-3 (Feature Extraction)
 """
 
 import numpy as np
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 from collections import deque
 
 
@@ -37,8 +37,7 @@ class FeatureExtractor:
     def __init__(
         self,
         buffer_size: int = DEFAULT_BUFFER_SIZE,
-        include_velocity: bool = True,
-        include_acceleration: bool = False
+        include_velocity: bool = True
     ):
         """
         Initialize the feature extractor.
@@ -46,17 +45,12 @@ class FeatureExtractor:
         Args:
             buffer_size: Size of frame buffer for temporal features
             include_velocity: Whether to include velocity features
-            include_acceleration: Whether to include acceleration features
         """
         self.buffer_size = buffer_size
         self.include_velocity = include_velocity
-        self.include_acceleration = include_acceleration
 
         # Frame buffer for temporal features
         self._frame_buffer: deque = deque(maxlen=buffer_size)
-
-        # Previous velocity for acceleration calculation
-        self._prev_velocity: Optional[np.ndarray] = None
 
         # Feature dimensions
         self.feature_dim = self._calculate_feature_dim()
@@ -66,9 +60,6 @@ class FeatureExtractor:
         dim = self.STATIC_DIM  # Static features always included
 
         if self.include_velocity:
-            dim += self.STATIC_DIM
-
-        if self.include_acceleration:
             dim += self.STATIC_DIM
 
         return dim
@@ -97,6 +88,8 @@ class FeatureExtractor:
         """
         Extract all features (static + temporal) from landmarks.
 
+        Optimized with numpy vectorization for better performance.
+
         Args:
             landmarks: numpy array of shape (21, 3)
             add_to_buffer: Whether to add this frame to the temporal buffer
@@ -104,8 +97,8 @@ class FeatureExtractor:
         Returns:
             Feature array of shape (feature_dim,)
         """
-        # Extract static features
-        static_features = self.extract_static(landmarks)
+        # Extract static features (vectorized)
+        static_features = landmarks.flatten().astype(np.float32)
 
         if not self.include_velocity:
             return static_features
@@ -114,34 +107,15 @@ class FeatureExtractor:
         if add_to_buffer:
             self._frame_buffer.append(landmarks.copy())
 
-        # Calculate velocity if we have at least 2 frames
-        velocity_features = np.zeros(self.STATIC_DIM, dtype=np.float32)
-
+        # Calculate velocity if we have at least 2 frames (vectorized)
         if len(self._frame_buffer) >= 2:
-            # Get current and previous frames
-            current_frame = landmarks.flatten()
-            prev_frame = self._frame_buffer[-2].flatten()
+            # Vectorized velocity calculation
+            velocity_features = (static_features - self._frame_buffer[-2].flatten().astype(np.float32))
+        else:
+            velocity_features = np.zeros(self.STATIC_DIM, dtype=np.float32)
 
-            # Velocity = current - previous
-            velocity_features = (current_frame - prev_frame).astype(np.float32)
-
-        # Combine static and velocity
-        features = [static_features, velocity_features]
-
-        # Add acceleration if requested
-        if self.include_acceleration:
-            acceleration_features = np.zeros(self.STATIC_DIM, dtype=np.float32)
-
-            if self._prev_velocity is not None:
-                # Acceleration = current velocity - previous velocity
-                acceleration_features = (
-                    velocity_features - self._prev_velocity
-                ).astype(np.float32)
-
-            self._prev_velocity = velocity_features.copy()
-            features.append(acceleration_features)
-
-        return np.concatenate(features)
+        # Combine static and velocity (vectorized concatenation)
+        return np.concatenate([static_features, velocity_features])
 
     def extract_from_buffer(self) -> Optional[np.ndarray]:
         """
@@ -172,6 +146,8 @@ class FeatureExtractor:
         """
         Calculate total motion magnitude in the buffer.
 
+        Optimized with numpy vectorization for better performance.
+
         Useful for detecting if hand is moving (dynamic sign) or static.
 
         Returns:
@@ -180,13 +156,11 @@ class FeatureExtractor:
         if len(self._frame_buffer) < 2:
             return 0.0
 
-        total_motion = 0.0
-
-        for i in range(1, len(self._frame_buffer)):
-            diff = self._frame_buffer[i] - self._frame_buffer[i-1]
-            total_motion += np.linalg.norm(diff)
-
-        return float(total_motion)
+        # Vectorized motion calculation
+        frames = np.array(list(self._frame_buffer))
+        diffs = np.diff(frames, axis=0)
+        motion_magnitudes = np.linalg.norm(diffs, axis=1)
+        return float(np.sum(motion_magnitudes))
 
     def is_static(self, threshold: float = 0.01) -> bool:
         """
@@ -212,10 +186,9 @@ class FeatureExtractor:
         """
         return self.get_motion_magnitude() > threshold
 
-    def reset_buffer(self):
+    def reset_buffer(self) -> None:
         """Clear the frame buffer and reset temporal features."""
         self._frame_buffer.clear()
-        self._prev_velocity = None
 
     def get_buffer_size(self) -> int:
         """Get current number of frames in buffer."""
@@ -280,7 +253,7 @@ class FeatureExtractor:
         self,
         landmarks: np.ndarray,
         normalized: bool = True
-    ) -> Tuple[np.ndarray, dict]:
+    ) -> Tuple[np.ndarray, Dict[str, float]]:
         """
         Extract all features (raw + engineered) from landmarks.
 
@@ -310,6 +283,5 @@ class FeatureExtractor:
             f"FeatureExtractor("
             f"buffer_size={self.buffer_size}, "
             f"velocity={self.include_velocity}, "
-            f"acceleration={self.include_acceleration}, "
             f"dim={self.feature_dim})"
         )

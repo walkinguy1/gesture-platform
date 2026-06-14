@@ -17,7 +17,7 @@ import logging
 import time
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import cv2
 import mediapipe as mp
@@ -203,7 +203,7 @@ class HandTracker:
 
         logger.debug("HandTracker initialised (model=%s, mode=%s)", resolved, running_mode)
 
-    def process(self, image: np.ndarray) -> List[Dict]:
+    def process(self, image: np.ndarray) -> List[Dict[str, any]]:
         """
         Process an image frame and detect hand landmarks.
 
@@ -258,7 +258,7 @@ class HandTracker:
     def draw_landmarks(
         self,
         image: np.ndarray,
-        hand_data: Dict,
+        hand_data: Dict[str, any],
         draw_connections: bool = True,
         landmark_color: Tuple[int, int, int] = (0, 255, 0),
         connection_color: Tuple[int, int, int] = (0, 200, 0),
@@ -367,6 +367,6 @@ class HandTracker:
     def __enter__(self) -> "HandTracker":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type: any, exc_val: any, exc_tb: any) -> bool:
         self.close()
         return False

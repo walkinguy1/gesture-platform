@@ -11,13 +11,15 @@ Priority: HIGH (Phase 2 – Accuracy Improvements)
 
 import logging
 import pickle
-from collections import Counter, deque
+from collections import Counter
 from pathlib import Path
-from typing import Deque, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+
+from .prediction_smoother import PredictionSmoother
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ class MLPRecognizer:
         self._scaler: Optional[StandardScaler] = None
         self._label_encoder: Optional[LabelEncoder] = None
         self._classes: List[str] = []
-        self._prediction_buffer: Deque[Tuple[str, float]] = deque(maxlen=smoothing_window)
+        self._smoother = PredictionSmoother(window_size=smoothing_window)
 
     # ------------------------------------------------------------------
     # Training
@@ -176,20 +178,11 @@ class MLPRecognizer:
         predicted_class, confidence = self.predict(features)
 
         if predicted_class is None:
-            self._prediction_buffer.clear()
+            self._smoother.reset()
             return None, confidence
 
-        self._prediction_buffer.append((predicted_class, confidence))
-
-        if len(self._prediction_buffer) >= 3:
-            preds = [p for p, _ in self._prediction_buffer]
-            counter = Counter(preds)
-            smoothed, count = counter.most_common(1)[0]
-            if count >= len(preds) // 2:
-                confs = [c for p, c in self._prediction_buffer if p == smoothed]
-                return smoothed, float(np.mean(confs))
-
-        return predicted_class, confidence
+        self._smoother.add(predicted_class, confidence)
+        return self._smoother.get_smoothed()
 
     def predict_batch(
         self,
@@ -222,7 +215,7 @@ class MLPRecognizer:
 
     def reset_smoothing(self) -> None:
         """Clear the prediction smoothing buffer."""
-        self._prediction_buffer.clear()
+        self._smoother.reset()
 
     def set_confidence_threshold(self, threshold: float) -> None:
         """Clamp and set the confidence threshold."""

@@ -50,9 +50,22 @@ class Normalizer:
 
         Returns:
             Normalized landmarks array of shape (21, 3)
+
+        Raises:
+            ValueError: If landmarks are invalid
+            TypeError: If landmarks are not numpy array
         """
-        if landmarks is None or len(landmarks) != 21:
-            raise ValueError("Expected 21 landmarks")
+        if landmarks is None:
+            raise ValueError("Landmarks cannot be None")
+
+        if not isinstance(landmarks, np.ndarray):
+            raise TypeError(f"Expected numpy array, got {type(landmarks).__name__}")
+
+        if landmarks.shape != (21, 3):
+            raise ValueError(f"Expected landmarks shape (21, 3), got {landmarks.shape}")
+
+        if not np.isfinite(landmarks).all():
+            raise ValueError("Landmarks contain NaN or infinite values")
 
         # Make a copy to avoid modifying original
         normalized = landmarks.copy()
@@ -67,6 +80,8 @@ class Normalizer:
 
         if hand_size > 0:
             normalized = normalized / hand_size
+        else:
+            raise ValueError(f"Invalid hand size: {hand_size}")
 
         # Step 3: Rotation - align to canonical orientation
         if rotation_correct:

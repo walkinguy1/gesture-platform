@@ -1,0 +1,27 @@
+# Development & Training Dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Core production requirements
+-r requirements.txt
+
+# Deep Learning & Model Training (optional, for training scripts only)
+tensorflow==2.16.2
+onnxruntime-gpu==1.19.2
+
+# Data Analysis & Visualization
+matplotlib==3.9.3
+seaborn==0.13.2
+jupyter==1.1.1
+ipykernel==6.29.5
+
+# Testing & Code Quality
+pytest==8.3.4
+pytest-cov==6.0.0
+pytest-asyncio==0.24.0
+black==24.10.0
+flake8==7.1.1
+mypy==1.11.1
+
+# Documentation
+sphinx==8.0.2
+sphinx-rtd-theme==2.0.0

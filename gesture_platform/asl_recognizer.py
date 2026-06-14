@@ -15,9 +15,9 @@ Reference: PRD Section FR-4 (ASL Alphabet Recognition) + Phase 4 Enhancements
 
 import logging
 import pickle
-from collections import Counter, deque
+from collections import Counter
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -28,6 +28,7 @@ from .exceptions import (
     PredictionError,
     InputValidationError,
 )
+from .prediction_smoother import PredictionSmoother
 from .sign_language_registry import (
     get_registry,
     InvalidSymbolError,
@@ -78,6 +79,7 @@ class ASLRecognizer:
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         smoothing_window: int = DEFAULT_SMOOTHING_WINDOW,
         use_smoothing: bool = True,
+        adaptive_threshold: bool = True,
     ):
         """
         Initialize the ASL recognizer.
@@ -87,6 +89,7 @@ class ASLRecognizer:
             confidence_threshold: Minimum confidence to display prediction (0-1)
             smoothing_window: Number of frames to smooth predictions
             use_smoothing: Whether to apply temporal smoothing
+            adaptive_threshold: Whether to dynamically adjust confidence threshold based on prediction stability
 
         Raises:
             InputValidationError: If parameters are invalid
@@ -108,16 +111,22 @@ class ASLRecognizer:
 
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
+        self.base_confidence_threshold = confidence_threshold
         self.smoothing_window = smoothing_window
         self.use_smoothing = use_smoothing
+        self.adaptive_threshold = adaptive_threshold
 
         # Model and classes
         self.model = None
         self.classes = self.ALL_CLASSES
 
-        # Prediction smoothing buffer
-        self._prediction_buffer: Deque[Tuple[str, float]] = deque(maxlen=smoothing_window)
+        # Prediction smoother
+        self._smoother = PredictionSmoother(window_size=smoothing_window)
         self._ema_probs: Optional[np.ndarray] = None
+
+        # Adaptive threshold state
+        self._confidence_history: List[float] = []
+        self._prediction_stability_score: float = 0.0
 
         # Load model if path provided
         if model_path:
@@ -292,6 +301,13 @@ class ASLRecognizer:
         except (InvalidSymbolError, SignLanguageError) as e:
             logger.debug("Failed to track prediction in registry: %s", e)
 
+        # Update confidence history for adaptive threshold
+        if self.adaptive_threshold:
+            self._confidence_history.append(confidence)
+            if len(self._confidence_history) > 20:
+                self._confidence_history.pop(0)
+            self._update_adaptive_threshold()
+
     def predict(
         self,
         features: np.ndarray,
@@ -359,7 +375,7 @@ class ASLRecognizer:
         """
         Predict with temporal smoothing to reduce jitter.
 
-        Uses EMA-based probability smoothing with short-window vote stabilization.
+        Uses EMA-based probability smoothing with PredictionSmoother for vote stabilization.
         Useful for real-time applications where predictions need to be stable.
 
         Args:
@@ -385,7 +401,7 @@ class ASLRecognizer:
             # Get class probabilities
             classes, probabilities = self._predict_probabilities(features)
             if classes is None or probabilities is None:
-                self._prediction_buffer.clear()
+                self._smoother.reset()
                 self._ema_probs = None
                 return None, 0.0
 
@@ -401,21 +417,13 @@ class ASLRecognizer:
             predicted_class = str(classes[best_idx])
             confidence = float(self._ema_probs[best_idx])
 
-            # Add to buffer and perform majority voting on last 3-5 frames
-            self._prediction_buffer.append((predicted_class, confidence))
-            if len(self._prediction_buffer) >= 3:
-                votes = [pred for pred, _ in self._prediction_buffer]
-                counter = Counter(votes)
-                winner, count = counter.most_common(1)[0]
-
-                # If majority agrees, use the majority prediction
-                if count >= (len(votes) // 2 + 1):
-                    confs = [conf for pred, conf in self._prediction_buffer if pred == winner]
-                    predicted_class = winner
-                    confidence = float(np.mean(confs))
+            # Use PredictionSmoother for temporal smoothing
+            self._smoother.add(predicted_class, confidence)
+            predicted_class, confidence = self._smoother.get_smoothed()
 
             # Track prediction
-            self._track_prediction(predicted_class, confidence)
+            if predicted_class:
+                self._track_prediction(predicted_class, confidence)
 
             # Apply confidence threshold
             if confidence < self.confidence_threshold:
@@ -495,10 +503,46 @@ class ASLRecognizer:
             logger.exception(error_msg)
             raise PredictionError(error_msg) from e
 
+    def _update_adaptive_threshold(self) -> None:
+        """
+        Update confidence threshold based on prediction stability.
+
+        If predictions are stable (low variance), lower threshold for faster response.
+        If predictions are unstable (high variance), raise threshold for accuracy.
+        """
+        if len(self._confidence_history) < 5:
+            return
+
+        conf_array = np.array(self._confidence_history)
+        conf_variance = np.var(conf_array)
+        conf_mean = np.mean(conf_array)
+
+        # Calculate stability score (0 = unstable, 1 = stable)
+        stability = max(0.0, 1.0 - (conf_variance / 0.1))
+
+        # Smooth the stability score
+        self._prediction_stability_score = 0.8 * self._prediction_stability_score + 0.2 * stability
+
+        # Adjust threshold based on stability
+        # More stable = lower threshold (faster response)
+        # Less stable = higher threshold (more accurate)
+        adjustment = (1.0 - self._prediction_stability_score) * 0.15
+        self.confidence_threshold = min(0.95, max(0.5, self.base_confidence_threshold + adjustment))
+
+        logger.debug(
+            "Adaptive threshold: %.3f (stability: %.2f, variance: %.4f)",
+            self.confidence_threshold,
+            self._prediction_stability_score,
+            conf_variance
+        )
+
     def reset_smoothing(self) -> None:
         """Clear the prediction smoothing buffer and EMA state."""
-        self._prediction_buffer.clear()
+        self._smoother.reset()
         self._ema_probs = None
+        self._confidence_history.clear()
+        self._prediction_stability_score = 0.0
+        self.confidence_threshold = self.base_confidence_threshold
         logger.debug("Smoothing buffer reset")
 
     def set_confidence_threshold(self, threshold: float) -> None:
