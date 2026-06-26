@@ -299,18 +299,6 @@ class Normalizer:
 
         return float(similarity)
 
-    def to_flat_array(self, landmarks: np.ndarray) -> np.ndarray:
-        """
-        Convert 3D landmarks to flat feature array.
-
-        Args:
-            landmarks: numpy array of shape (21, 3)
-
-        Returns:
-            Flat array of shape (63,) - 21 landmarks * 3 coordinates
-        """
-        return landmarks.flatten()
-
     def __repr__(self) -> str:
         """String representation."""
         calibrated = self.calibrated_hand_size is not None

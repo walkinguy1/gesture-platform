@@ -10,10 +10,10 @@ Examples:
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 
-PRESETS: Dict[str, List[str]] = {
+PRESETS = {
     "alphabet": list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
     "numbers": [str(i) for i in range(10)],
     "alphabet_numbers": list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + [str(i) for i in range(10)],

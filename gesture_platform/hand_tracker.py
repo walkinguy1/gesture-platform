@@ -148,7 +148,6 @@ class HandTracker:
         max_num_hands: int = 2,
         min_detection_confidence: float = 0.7,
         min_tracking_confidence: float = 0.5,
-        model_complexity: int = 1,
         static_image_mode: bool = False,
         model_path: Optional[str] = None,
     ):
@@ -159,8 +158,6 @@ class HandTracker:
             max_num_hands: Maximum number of hands to detect (1-2).
             min_detection_confidence: Minimum detection confidence (0.0-1.0).
             min_tracking_confidence: Minimum tracking confidence (0.0-1.0).
-            model_complexity: Kept for API compatibility; complexity is determined
-                by the model file chosen.
             static_image_mode: If True, use IMAGE running mode (slower but
                 accurate for static images). If False, use VIDEO mode (faster,
                 maintains tracking across frames).
@@ -171,7 +168,6 @@ class HandTracker:
         self.max_num_hands = max_num_hands
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
-        self.model_complexity = model_complexity
         self.static_image_mode = static_image_mode
 
         # Resolve model path

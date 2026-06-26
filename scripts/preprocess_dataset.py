@@ -12,7 +12,6 @@ import os
 import sys
 import argparse
 import json
-import numpy as np
 import cv2
 from pathlib import Path
 from tqdm import tqdm

@@ -29,11 +29,7 @@ from datetime import datetime
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix
-)
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -188,41 +184,24 @@ def load_dataset(data_dir: str):
 
     if not combined_file.exists():
         # Try to load individual files
-        return load_individual_files(data_path)
+        print(f"Loading individual files from {data_path}")
+        pkl_files = list(data_path.glob('*.pkl'))
+        pkl_files = [f for f in pkl_files if f.name != 'combined_data.pkl']
+        print(f"Found {len(pkl_files)} files")
+
+        loaded_samples = []
+        for pkl_file in tqdm(pkl_files):
+            with open(pkl_file, 'rb') as f:
+                sample = pickle.load(f)
+            loaded_samples.append((sample["class"], [sample]))
+        return _extract_dataset_from_samples(loaded_samples)
 
     print(f"Loading dataset from {combined_file}")
-
     with open(combined_file, 'rb') as f:
         all_data = pickle.load(f)
 
     print(f"Processing {len(all_data)} classes...")
     return _extract_dataset_from_samples(all_data.items())
-
-
-def load_individual_files(data_dir: Path):
-    """
-    Load individual pickle files from directory.
-
-    Args:
-        data_dir: Directory containing .pkl files
-
-    Returns:
-        Tuple of (features, labels, class_names)
-    """
-    print(f"Loading individual files from {data_dir}")
-
-    # Get all pickle files
-    pkl_files = list(data_dir.glob('*.pkl'))
-    pkl_files = [f for f in pkl_files if f.name != 'combined_data.pkl']
-
-    print(f"Found {len(pkl_files)} files")
-
-    loaded_samples = []
-    for pkl_file in tqdm(pkl_files):
-        with open(pkl_file, 'rb') as f:
-            sample = pickle.load(f)
-        loaded_samples.append((sample["class"], [sample]))
-    return _extract_dataset_from_samples(loaded_samples)
 
 
 def _extract_dataset_from_samples(items):
@@ -370,33 +349,6 @@ def train_mlp(
     return recognizer
 
 
-# Keep the original train_model name as an alias for backwards compatibility
-def train_model(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    n_estimators: int = 200,
-    max_depth: int = 30,
-    random_seed: int = 42
-):
-    """
-    Train Random Forest model (backwards-compatible wrapper).
-
-    Args:
-        X_train: Training features
-        y_train: Training labels
-        n_estimators: Number of trees
-        max_depth: Maximum tree depth
-        random_seed: Random seed
-
-    Returns:
-        Trained model
-    """
-    return train_random_forest(
-        X_train, y_train,
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        random_seed=random_seed,
-    )
 
 
 def run_cross_validation(

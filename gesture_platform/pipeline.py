@@ -21,7 +21,6 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
-import numpy as np
 
 from .asl_recognizer import ASLRecognizer
 from .feature_extractor import FeatureExtractor

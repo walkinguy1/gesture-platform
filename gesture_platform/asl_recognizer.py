@@ -22,9 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .exceptions import (
-    ModelLoadError,
     ModelNotLoadedError,
-    ModelSaveError,
     PredictionError,
     InputValidationError,
 )
@@ -33,7 +31,6 @@ from .sign_language_registry import (
     get_registry,
     InvalidSymbolError,
     SignLanguageError,
-    SignLanguageNotFoundError,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,7 +140,7 @@ class ASLRecognizer:
             True if model loaded successfully
 
         Raises:
-            ModelLoadError: If model loading fails
+            PredictionError: If model loading fails
         """
         try:
             path = Path(model_path)
@@ -177,23 +174,23 @@ class ASLRecognizer:
         except FileNotFoundError as e:
             error_msg = f"Model file not found: {model_path}"
             logger.error(error_msg)
-            raise ModelLoadError(error_msg) from e
+            raise PredictionError(error_msg) from e
         except PermissionError as e:
             error_msg = f"Permission denied reading model file: {model_path}"
             logger.error(error_msg)
-            raise ModelLoadError(error_msg) from e
+            raise PredictionError(error_msg) from e
         except pickle.UnpicklingError as e:
             error_msg = f"Invalid model file format (corrupted pickle): {model_path}"
             logger.error(error_msg)
-            raise ModelLoadError(error_msg) from e
+            raise PredictionError(error_msg) from e
         except ValueError as e:
             error_msg = f"Invalid model data: {e}"
             logger.error(error_msg)
-            raise ModelLoadError(error_msg) from e
+            raise PredictionError(error_msg) from e
         except Exception as e:
             error_msg = f"Unexpected error loading model: {e}"
             logger.exception(error_msg)
-            raise ModelLoadError(error_msg) from e
+            raise PredictionError(error_msg) from e
 
     def _validate_features(self, features: np.ndarray) -> np.ndarray:
         """
@@ -564,24 +561,6 @@ class ASLRecognizer:
         self.confidence_threshold = threshold
         logger.debug("Confidence threshold set to %.2f", threshold)
 
-    def get_feature_importance(self) -> Optional[np.ndarray]:
-        """
-        Get feature importance from the model.
-
-        Returns:
-            Array of feature importances or None if not available
-
-        Raises:
-            ModelNotLoadedError: If model not loaded
-        """
-        if self.model is None:
-            raise ModelNotLoadedError("Model not loaded")
-
-        if not hasattr(self.model, 'feature_importances_'):
-            logger.warning("Model does not have feature_importances_ attribute")
-            return None
-
-        return self.model.feature_importances_
 
     def get_classes(self) -> List[str]:
         """
@@ -610,26 +589,6 @@ class ASLRecognizer:
         """
         return self._registry
 
-    def get_language_statistics(self) -> Dict[str, Any]:
-        """
-        Get statistics for the current language.
-
-        Returns:
-            Dictionary with prediction statistics including:
-            - language: Current language code
-            - total_symbols: Number of recognized symbols
-            - total_predictions: Total predictions made
-            - total_errors: Total errors recorded
-            - average_confidence: Average confidence across all predictions
-            - symbols: Per-symbol statistics
-
-        Returns empty dict if statistics unavailable.
-        """
-        try:
-            return self._registry.get_language_statistics()
-        except SignLanguageError as e:
-            logger.error("Failed to get statistics: %s", e)
-            return {}
 
     def __repr__(self) -> str:
         """String representation."""
@@ -640,120 +599,3 @@ class ASLRecognizer:
         )
 
 
-class ModelLoader:
-    """
-    Utility class for loading and saving models with error handling.
-
-    Provides convenient methods for model persistence and loading.
-    """
-
-    @staticmethod
-    def load(model_path: str) -> ASLRecognizer:
-        """
-        Load a model and return ASLRecognizer instance.
-
-        Args:
-            model_path: Path to model file
-
-        Returns:
-            ASLRecognizer instance with loaded model
-
-        Raises:
-            ModelLoadError: If model loading fails
-        """
-        try:
-            recognizer = ASLRecognizer(model_path=model_path)
-            if not recognizer.is_loaded():
-                raise ModelLoadError(f"Failed to load model from {model_path}")
-            return recognizer
-        except ModelLoadError:
-            raise
-        except Exception as e:
-            raise ModelLoadError(f"Error loading model: {e}") from e
-
-    @staticmethod
-    def save(
-        model: Any,
-        classes: List[str],
-        model_path: str,
-    ) -> bool:
-        """
-        Save a model to file with error handling.
-
-        Args:
-            model: Trained model object
-            classes: List of class labels
-            model_path: Path to save model
-
-        Returns:
-            True if saved successfully
-
-        Raises:
-            ModelSaveError: If model saving fails
-        """
-        try:
-            # Validate inputs
-            if model is None:
-                raise ValueError("Model cannot be None")
-
-            if not classes or not isinstance(classes, (list, tuple)):
-                raise ValueError("Classes must be a non-empty list or tuple")
-
-            # Create directory if needed
-            path = Path(model_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Prepare model data
-            model_data = {
-                'model': model,
-                'classes': classes,
-                'version': '2.0',
-            }
-
-            # Save with atomic write (write to temp, then rename)
-            temp_path = path.with_suffix('.pkl.tmp')
-            with open(temp_path, 'wb') as f:
-                pickle.dump(model_data, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-            # Atomic rename
-            temp_path.replace(path)
-
-            logger.info("Model saved to %s", model_path)
-            return True
-
-        except PermissionError as e:
-            error_msg = f"Permission denied saving to {model_path}"
-            logger.error(error_msg)
-            raise ModelSaveError(error_msg) from e
-        except OSError as e:
-            error_msg = f"IO error saving model: {e}"
-            logger.error(error_msg)
-            raise ModelSaveError(error_msg) from e
-        except ValueError as e:
-            error_msg = f"Invalid model data: {e}"
-            logger.error(error_msg)
-            raise ModelSaveError(error_msg) from e
-        except Exception as e:
-            error_msg = f"Unexpected error saving model: {e}"
-            logger.exception(error_msg)
-            raise ModelSaveError(error_msg) from e
-
-    @staticmethod
-    def get_default_model_path() -> str:
-        """
-        Get the default model path.
-
-        Returns:
-            Path to default model if it exists, otherwise convention path
-        """
-        # Try to find model in package
-        package_dir = Path(__file__).parent
-        model_dir = package_dir / 'models'
-
-        default_path = model_dir / 'asl_alphabet.pkl'
-
-        if default_path.exists():
-            return str(default_path)
-
-        # Fallback to convention path
-        return 'models/asl_alphabet.pkl'

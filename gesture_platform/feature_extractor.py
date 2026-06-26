@@ -53,16 +53,7 @@ class FeatureExtractor:
         self._frame_buffer: deque = deque(maxlen=buffer_size)
 
         # Feature dimensions
-        self.feature_dim = self._calculate_feature_dim()
-
-    def _calculate_feature_dim(self) -> int:
-        """Calculate total feature dimension."""
-        dim = self.STATIC_DIM  # Static features always included
-
-        if self.include_velocity:
-            dim += self.STATIC_DIM
-
-        return dim
+        self.feature_dim = self.STATIC_DIM * 2 if self.include_velocity else self.STATIC_DIM
 
     def extract_static(self, landmarks: np.ndarray) -> np.ndarray:
         """
@@ -198,84 +189,6 @@ class FeatureExtractor:
         """Get all frames in the buffer as a list."""
         return list(self._frame_buffer)
 
-    def extract_hand_shape_features(self, landmarks: np.ndarray) -> dict:
-        """
-        Extract hand shape features useful for ASL recognition.
-
-        These are engineered features that capture finger positions
-        and relationships between landmarks.
-
-        Args:
-            landmarks: numpy array of shape (21, 3)
-
-        Returns:
-            Dictionary of hand shape features
-        """
-        features = {}
-
-        # Finger lengths (distance from MCP to tip)
-        finger_indices = {
-            'thumb': (2, 4),   # MCP to TIP
-            'index': (5, 8),
-            'middle': (9, 12),
-            'ring': (13, 16),
-            'pinky': (17, 20)
-        }
-
-        for finger, (mcp_idx, tip_idx) in finger_indices.items():
-            mcp = landmarks[mcp_idx]
-            tip = landmarks[tip_idx]
-            features[f'{finger}_length'] = float(np.linalg.norm(tip - mcp))
-
-        # Finger spread (distance between adjacent finger tips)
-        tip_indices = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky tips
-        for i in range(len(tip_indices) - 1):
-            tip1 = landmarks[tip_indices[i]]
-            tip2 = landmarks[tip_indices[i + 1]]
-            features[f'spread_{i}'] = float(np.linalg.norm(tip1 - tip2))
-
-        # Palm width (distance between index MCP and pinky MCP)
-        index_mcp = landmarks[5]
-        pinky_mcp = landmarks[17]
-        features['palm_width'] = float(np.linalg.norm(index_mcp - pinky_mcp))
-
-        # Hand aspect ratio
-        wrist = landmarks[0]
-        middle_tip = landmarks[12]
-        hand_length = float(np.linalg.norm(middle_tip - wrist))
-        features['hand_aspect_ratio'] = (
-            features['palm_width'] / hand_length if hand_length > 0 else 0
-        )
-
-        return features
-
-    def extract_all_features(
-        self,
-        landmarks: np.ndarray,
-        normalized: bool = True
-    ) -> Tuple[np.ndarray, Dict[str, float]]:
-        """
-        Extract all features (raw + engineered) from landmarks.
-
-        Args:
-            landmarks: numpy array of shape (21, 3)
-            normalized: Whether landmarks are already normalized
-
-        Returns:
-            Tuple of (raw features array, engineered features dict)
-        """
-        # Raw features (flattened)
-        raw_features = self.extract_static(landmarks)
-
-        # Engineered features
-        if normalized:
-            engineered = self.extract_hand_shape_features(landmarks)
-        else:
-            # Calculate from normalized version
-            # This requires a normalizer - placeholder
-            engineered = {}
-
-        return raw_features, engineered
 
     def __repr__(self) -> str:
         """String representation."""

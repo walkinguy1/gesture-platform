@@ -11,7 +11,6 @@ Reference: PRD Section 6.2 (Real-Time Demo)
 import os
 import sys
 import argparse
-import numpy as np
 import cv2
 import time
 from pathlib import Path
