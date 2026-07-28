@@ -49,16 +49,34 @@ export const useStore = create()(
       // ──────── CALIBRATION (Device Profile) ────────
       calibration: {
         isCalibrated: false,
-        handSize: null
+        handConfidenceBaseline: null
       },
 
       // ──────── PROGRESS (Learner Stats) ────────
       progress: emptyProgress(),
 
+      // ──────── SESSION STATE (Non-persisted) ────────
+      session: {
+        focusLetter: null
+      },
+
       // ──────── REALTIME (Current Session) ────────
       realtime: {
         prediction: null,
-        confidence: 0
+        confidence: 0,
+        predictionKind: null, // 'static' | 'dynamic' | null
+        fps: 0,
+        bridgeStatus: 'disconnected',
+        languages: [], // [{ code, name, country, static_ready, dynamic_ready, supports_dynamic }]
+        activeLanguage: null, // backend-confirmed active language code
+        lastError: null
+      },
+
+      // WS bridge command channel, wired up by useBridge() on mount so any
+      // component (not just the one that called the hook) can send
+      // commands like switching the active sign language.
+      bridgeApi: {
+        sendMessage: null
       },
 
       // ──────── ACTIONS ────────
@@ -74,9 +92,9 @@ export const useStore = create()(
         set((state) => ({
           progress: {
             ...state.progress,
-            letters: state.progress.letters.includes(letter)
+            letters: state.progress.letters.some(l => l.letter === letter)
               ? state.progress.letters
-              : [...state.progress.letters, letter],
+              : [...state.progress.letters, { letter, masteredAt: new Date().toISOString() }],
             streak: calculateStreak(
               state.progress.lastPracticeDate,
               state.progress.streak
@@ -94,13 +112,52 @@ export const useStore = create()(
           }
         })),
 
-      setPrediction: (pred, conf) => set({
-        realtime: { prediction: pred, confidence: conf }
-      }),
+      setPrediction: (pred, conf, kind = null) => set((state) => ({
+        realtime: { ...state.realtime, prediction: pred, confidence: conf, predictionKind: kind }
+      })),
 
-      reset: () => set({
+      setFps: (fps) => set((state) => ({
+        realtime: { ...state.realtime, fps }
+      })),
+
+      setBridgeStatus: (status) => set((state) => ({
+        realtime: { ...state.realtime, bridgeStatus: status }
+      })),
+
+      setLanguages: (languages, active) => set((state) => ({
+        realtime: { ...state.realtime, languages, activeLanguage: active }
+      })),
+
+      setActiveLanguage: (code) => set((state) => ({
+        realtime: { ...state.realtime, activeLanguage: code }
+      })),
+
+      setBridgeError: (message) => set((state) => ({
+        realtime: { ...state.realtime, lastError: message }
+      })),
+
+      setBridgeApi: (api) => set(() => ({ bridgeApi: api })),
+
+      setFocusLetter: (letter) => set((state) => ({
+        session: { ...state.session, focusLetter: letter }
+      })),
+
+      reset: () => set((state) => ({
         progress: emptyProgress(),
-        realtime: { prediction: null, confidence: 0 }
+        realtime: {
+          prediction: null,
+          confidence: 0,
+          predictionKind: null,
+          fps: 0,
+          bridgeStatus: 'disconnected',
+          languages: state.realtime.languages,
+          activeLanguage: state.realtime.activeLanguage,
+          lastError: null
+        }
+      })),
+
+      resetProgress: () => set({
+        progress: emptyProgress()
       })
     }),
     {
@@ -111,6 +168,7 @@ export const useStore = create()(
         settings: state.settings,
         calibration: state.calibration,
         progress: state.progress
+        // session and realtime are NOT persisted
       })
     }
   )

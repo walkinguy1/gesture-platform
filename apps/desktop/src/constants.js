@@ -10,7 +10,6 @@ export const ALL_SYMBOLS = [...ALPHABET, ...NUMBERS]
 
 // UI Navigation Modes
 export const MODES = {
-  MENU: 'menu',
   PRACTICE: 'practice',
   LIVE_CAPTION: 'live-caption',
   SETTINGS: 'settings',
@@ -68,6 +67,28 @@ export const COMMON_WORDS = [
 // Camera options
 export const CAMERA_CHOICES = [0, 1, 2, 3]
 
+// Fallback sign-language list shown before the backend bridge confirms the
+// live list (mirrors gesture_platform.sign_language_registry.KNOWN_LANGUAGES).
+// Once connected, `realtime.languages` from the store takes over.
+export const FALLBACK_SIGN_LANGUAGES = [
+  {
+    code: 'ASL',
+    name: 'American Sign Language',
+    country: 'USA',
+    static_ready: true,
+    dynamic_ready: false,
+    supports_dynamic: true
+  },
+  {
+    code: 'BSL',
+    name: 'British Sign Language',
+    country: 'UK',
+    static_ready: false,
+    dynamic_ready: false,
+    supports_dynamic: true
+  }
+]
+
 // Settings defaults
 export const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -103,7 +124,6 @@ export const CALIBRATION_CONFIG = {
 
 // Keyboard shortcuts
 export const KEYBOARD_SHORTCUTS = {
-  Escape: MODES.MENU,
   p: MODES.PRACTICE,
   P: MODES.PRACTICE,
   l: MODES.LIVE_CAPTION,
@@ -116,28 +136,3 @@ export const KEYBOARD_SHORTCUTS = {
   D: MODES.DASHBOARD
 }
 
-// Color schemes
-export const COLORS = {
-  primary: 'blue',
-  success: 'emerald',
-  warning: 'amber',
-  error: 'red',
-  info: 'sky',
-  neutral: 'slate'
-}
-
-// Accent gradients for cards
-export const ACCENT_GRADIENTS = {
-  emerald: 'from-emerald-500/35 via-emerald-300/10 to-transparent',
-  sky: 'from-sky-500/35 via-sky-300/10 to-transparent',
-  amber: 'from-amber-400/35 via-amber-300/10 to-transparent',
-  slate: 'from-slate-300/30 via-slate-100/10 to-transparent'
-}
-
-// Local storage keys
-export const STORAGE_KEYS = {
-  APP_STATE: 'gesture-platform-storage',
-  USER_PROGRESS: 'gesture-platform-progress',
-  CALIBRATION: 'gesture-platform-calibration',
-  SETTINGS: 'gesture-platform-settings'
-}

@@ -23,7 +23,7 @@ html.light {
   --app-bg: #eef4f6;
   --app-bg-soft: #ffffff;
   --app-panel: rgba(255, 255, 255, 0.82);
-  --app-panel-border: rgba(15, 23, 42, 0.08);
+  --app-panel-border: rgba(15, 23, 42, 0.10);
   --app-text: #122235;
   --app-muted: #587084;
   --app-track: rgba(148, 163, 184, 0.25);
@@ -31,6 +31,18 @@ html.light {
     radial-gradient(circle at top left, rgba(22, 163, 74, 0.14), transparent 28%),
     radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 26%),
     linear-gradient(180deg, #f5fbfc 0%, #edf4f7 55%, #f5f8fa 100%);
+}
+
+html.light .bg-white\/5 {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+html.light .border-white\/10 {
+  border-color: rgba(15, 23, 42, 0.10);
+}
+
+html.light .text-emerald-100 {
+  color: #065f46;
 }
 
 body {
@@ -91,7 +103,8 @@ body {
   }
 
   .camera-shell {
-    min-height: 420px;
+    aspect-ratio: 16 / 9;
+    width: 100%;
     background:
       linear-gradient(180deg, rgba(2, 6, 23, 0.68), rgba(2, 6, 23, 0.44)),
       #020617;
