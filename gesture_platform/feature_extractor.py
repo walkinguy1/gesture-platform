@@ -189,6 +189,49 @@ class FeatureExtractor:
         """Get all frames in the buffer as a list."""
         return list(self._frame_buffer)
 
+    def extract_hand_shape_features(self, landmarks: np.ndarray) -> Dict[str, float]:
+        """
+        Extract hand shape features useful for sign recognition.
+
+        These are engineered features that capture finger lengths, spread,
+        and palm width -- interpretable measurements a raw landmark vector
+        doesn't expose directly.
+
+        Args:
+            landmarks: numpy array of shape (21, 3)
+
+        Returns:
+            Dictionary of named hand shape features
+        """
+        features: Dict[str, float] = {}
+
+        # Finger lengths (distance from MCP to tip)
+        finger_indices = {
+            'thumb': (2, 4),   # MCP to TIP
+            'index': (5, 8),
+            'middle': (9, 12),
+            'ring': (13, 16),
+            'pinky': (17, 20),
+        }
+
+        for finger, (mcp_idx, tip_idx) in finger_indices.items():
+            mcp = landmarks[mcp_idx]
+            tip = landmarks[tip_idx]
+            features[f'{finger}_length'] = float(np.linalg.norm(tip - mcp))
+
+        # Finger spread (distance between adjacent finger tips)
+        tip_indices = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky tips
+        for i in range(len(tip_indices) - 1):
+            tip1 = landmarks[tip_indices[i]]
+            tip2 = landmarks[tip_indices[i + 1]]
+            features[f'spread_{i}'] = float(np.linalg.norm(tip1 - tip2))
+
+        # Palm width (distance between index MCP and pinky MCP)
+        index_mcp = landmarks[5]
+        pinky_mcp = landmarks[17]
+        features['palm_width'] = float(np.linalg.norm(index_mcp - pinky_mcp))
+
+        return features
 
     def __repr__(self) -> str:
         """String representation."""
