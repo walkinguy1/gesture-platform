@@ -20,3 +20,6 @@ tqdm==4.67.1
 # Configuration
 pyyaml==6.0.2
 python-dotenv==1.0.1
+
+# Desktop app bridge
+websockets==16.1.1
