@@ -1,22 +1,5 @@
-/**
- * Button Component
- * Consistent button styling with variants
- */
-export function Button({ variant = 'primary', children, className = '', ...props }) {
-    const variants = {
-        primary: 'bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-400 transition',
-        secondary: 'bg-gray-700 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition',
-        danger: 'bg-rose-500 text-white px-4 py-2 rounded-lg hover:bg-rose-400 transition',
-        ghost: 'text-white px-4 py-2 rounded-lg hover:bg-white/10 transition'
-    }
-    return (
-        <button className={`${variants[variant]} ${className}`} {...props}>
-            {children}
-        </button>
-    )
-}
-
 export { ErrorBoundary } from './ErrorBoundary'
+export { Button } from './Button'
 
 /**
  * Panel Component

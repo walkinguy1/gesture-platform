@@ -1,27 +1,20 @@
 /**
- * Reusable Button Component
- * Eliminates repeated Tailwind class strings across the app
+ * Canonical Button Component
+ * Consistent button styling with variants and sizes
  */
 
-export function Button({
-  variant = 'primary',
-  size = 'md',
-  disabled = false,
-  className = '',
-  children,
-  ...props
-}) {
+export function Button({ variant = 'primary', size = 'md', disabled, className = '', children, ...props }) {
   const variants = {
-    primary: 'bg-blue-500 hover:bg-blue-600 text-white',
-    secondary: 'bg-slate-700 hover:bg-slate-600 text-white border border-white/10',
-    danger: 'bg-red-600 hover:bg-red-700 text-white',
+    primary: 'primary-button',
+    secondary: 'secondary-button',
+    danger: 'danger-button',
     ghost: 'hover:bg-white/10 text-white'
   }
 
   const sizes = {
     sm: 'px-3 py-1.5 text-sm',
-    md: 'px-4 py-2 text-base',
-    lg: 'px-6 py-3 text-lg'
+    md: 'px-4 py-2 text-sm',
+    lg: 'px-5 py-2.5 text-base'
   }
 
   const baseStyle = 'rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed'

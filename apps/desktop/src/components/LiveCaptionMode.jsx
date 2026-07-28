@@ -29,6 +29,14 @@ export default function LiveCaptionMode({ onBack }) {
   const predictionBuffer = useRef([])
   const lastStablePrediction = useRef('')
 
+  const getBridgeStatusColor = () => {
+    switch (realtime.bridgeStatus) {
+      case 'connected': return 'text-emerald-400'
+      case 'connecting': return 'text-amber-400'
+      default: return 'text-rose-400'
+    }
+  }
+
   useEffect(() => {
     captionsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [captions])
@@ -51,12 +59,19 @@ export default function LiveCaptionMode({ onBack }) {
     }
 
     lastStablePrediction.current = stableCandidate[0]
-    setSentence((previous) => previous + stableCandidate[0])
+    const isDynamicWord = realtime.predictionKind === 'dynamic'
+    // Dynamic (word-level) signs read as whole words with a trailing space;
+    // static fingerspelling keeps building up letter-by-letter with no gaps.
+    const insertion = isDynamicWord
+      ? `${stableCandidate[0].toLowerCase().replace(/_/g, ' ')} `
+      : stableCandidate[0]
+
+    setSentence((previous) => previous + insertion)
     setCaptions((previous) => [
       ...previous.slice(-39),
       `[${new Date().toLocaleTimeString()}] ${stableCandidate[0]} (${Math.round(realtime.confidence * 100)}%)`
     ])
-  }, [realtime.confidence, isRecording, realtime.prediction, settings.confidenceThreshold])
+  }, [realtime.confidence, isRecording, realtime.prediction, realtime.predictionKind, settings.confidenceThreshold])
 
   const currentWord = useMemo(
     () => sentence.split(' ').filter(Boolean).slice(-1)[0] || '',
@@ -218,8 +233,11 @@ export default function LiveCaptionMode({ onBack }) {
               <div className="text-xs font-semibold uppercase tracking-[0.3em] text-app-muted">
                 Raw feed
               </div>
-              <div className="text-sm text-app-muted">
-                {captions.length} entries
+              <div className="flex items-center gap-3 text-sm text-app-muted">
+                <span className={getBridgeStatusColor()}>
+                  {realtime.bridgeStatus === 'connected' ? '● Connected' : realtime.bridgeStatus === 'connecting' ? '● Connecting' : '○ Disconnected'}
+                </span>
+                <span>{captions.length} entries</span>
               </div>
             </div>
 
@@ -250,6 +268,10 @@ export default function LiveCaptionMode({ onBack }) {
           </div>
           <div className="mt-4 grid gap-3">
             <StatRow label="Current symbol" value={realtime.prediction || 'No bridge signal'} />
+            <StatRow
+              label="Sign type"
+              value={realtime.predictionKind === 'dynamic' ? 'Dynamic (word)' : realtime.predictionKind === 'static' ? 'Static (letter)' : '--'}
+            />
             <StatRow label="Confidence gate" value={`${Math.round(settings.confidenceThreshold * 100)}%`} />
             <StatRow label="Latest confidence" value={realtime.prediction ? `${Math.round(realtime.confidence * 100)}%` : '--'} />
           </div>

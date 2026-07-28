@@ -23,6 +23,8 @@ export default function PracticeMode({ onBack }) {
     addPracticeTime
   } = useStore()
 
+  const maxAttempts = PRACTICE_CONFIG.MAX_ATTEMPTS
+
   const { isValid, checkConsensus } = usePredictionHandler({
     prediction,
     confidence,
@@ -32,12 +34,12 @@ export default function PracticeMode({ onBack }) {
   })
 
   const unmasteredLetters = useMemo(
-    () => ALPHABET.filter((letter) => !progress.letters.includes(letter)),
+    () => ALPHABET.filter((letter) => !progress.letters.some(l => l.letter === letter)),
     [progress.letters]
   )
 
   useEffect(() => {
-    if (unmasteredLetters.length > 0 && progress.letters.includes(currentLetter)) {
+    if (unmasteredLetters.length > 0 && progress.letters.some(l => l.letter === currentLetter)) {
       setCurrentLetter(unmasteredLetters[0])
     }
   }, [currentLetter, progress.letters, unmasteredLetters])

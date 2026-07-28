@@ -1,17 +1,39 @@
-import { memo } from 'react'
+import { memo, useState, useEffect } from 'react'
 import { useStore } from '../store'
 import { Panel, StatRow, ToggleRow, Button } from './index'
-import { CAMERA_CHOICES } from '../constants'
+import { CAMERA_CHOICES, FALLBACK_SIGN_LANGUAGES } from '../constants'
 
 function Settings({ onBack }) {
+  const [confirmReset, setConfirmReset] = useState(false)
+
   const {
     settings,
     progress,
-    handSize,
-    isCalibrated,
+    calibration,
+    realtime,
+    bridgeApi,
     updateSettings,
     resetProgress
   } = useStore()
+
+  const masteredLetters = progress.letters.map(l => l.letter)
+
+  const languages = realtime.languages.length > 0 ? realtime.languages : FALLBACK_SIGN_LANGUAGES
+
+  const handleSelectLanguage = (code) => {
+    updateSettings({ languageModel: code })
+    const sent = bridgeApi.sendMessage?.({ type: 'set_language', code })
+    if (!sent) {
+      console.warn('Bridge not connected; language will apply once the backend reconnects.')
+    }
+  }
+
+  useEffect(() => {
+    if (confirmReset) {
+      const timeout = setTimeout(() => setConfirmReset(false), 6000)
+      return () => clearTimeout(timeout)
+    }
+  }, [confirmReset])
 
   return (
     <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[0.95fr_1.05fr]">
@@ -36,24 +58,45 @@ function Settings({ onBack }) {
         </Panel>
 
         <Panel title="Practice profile" eyebrow="Learner">
-          <StatRow label="Calibration" value={isCalibrated ? 'Completed' : 'Recommended'} />
-          <StatRow label="Hand size" value={handSize ? handSize.toFixed(4) : 'Not stored'} />
-          <StatRow label="Letters mastered" value={`${progress.letters.length}/26`} />
+          <StatRow label="Calibration" value={calibration.isCalibrated ? 'Completed' : 'Recommended'} />
+          <StatRow label="Confidence baseline" value={calibration.handConfidenceBaseline ? calibration.handConfidenceBaseline.toFixed(4) : 'Not stored'} />
+          <StatRow label="Letters mastered" value={`${masteredLetters.length}/26`} />
           <StatRow label="Practice time" value={`${progress.totalPracticeTime} min`} />
         </Panel>
 
         <Panel title="Safety" eyebrow="Reset">
-          <Button
-            variant="danger"
-            className="w-full"
-            onClick={() => {
-              if (window.confirm('Reset all saved practice progress?')) {
-                resetProgress()
-              }
-            }}
-          >
-            Reset practice progress
-          </Button>
+          {!confirmReset ? (
+            <Button
+              variant="danger"
+              className="w-full"
+              onClick={() => setConfirmReset(true)}
+            >
+              Reset practice progress
+            </Button>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-app-muted">This will erase all progress. Are you sure?</span>
+              <div className="flex gap-2">
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => {
+                    resetProgress()
+                    setConfirmReset(false)
+                  }}
+                >
+                  Yes, reset
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmReset(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
         </Panel>
       </section>
 
@@ -74,6 +117,54 @@ function Settings({ onBack }) {
                 </Button>
               ))}
             </div>
+          </div>
+        </Panel>
+
+        <Panel title="Sign language" eyebrow="Vocabulary">
+          <div className="grid gap-3">
+            <div className="text-sm text-app-muted">
+              Choose which sign language the recognizer should use. Switching
+              here tells the Python backend to reload its models live.
+            </div>
+            <div className="grid gap-2">
+              {languages.map((lang) => {
+                const isSelected = settings.languageModel === lang.code
+                const badges = []
+                if (lang.static_ready) badges.push('Alphabet ready')
+                if (lang.dynamic_ready) badges.push('Words ready')
+                if (!lang.static_ready && !lang.dynamic_ready) badges.push('Needs training data')
+                else if (lang.supports_dynamic && !lang.dynamic_ready) badges.push('Words: needs training data')
+
+                return (
+                  <button
+                    key={lang.code}
+                    onClick={() => handleSelectLanguage(lang.code)}
+                    className={`flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+                      isSelected
+                        ? 'border-emerald-400/50 bg-emerald-500/10'
+                        : 'border-white/8 bg-white/5 hover:bg-white/8'
+                    }`}
+                  >
+                    <div>
+                      <div className="font-semibold">
+                        {lang.name} <span className="text-app-muted">({lang.code})</span>
+                      </div>
+                      <div className="mt-1 text-xs text-app-muted">{badges.join(' · ')}</div>
+                    </div>
+                    {isSelected && (
+                      <span className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                        Selected
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            {realtime.bridgeStatus !== 'connected' && (
+              <p className="text-xs text-amber-300">
+                Backend not connected yet -- this choice will be sent as soon as it is.
+              </p>
+            )}
           </div>
         </Panel>
 
@@ -125,7 +216,10 @@ function Settings({ onBack }) {
             <StatRow label="L" value="Live captions" />
             <StatRow label="C" value="Calibration" />
             <StatRow label="S" value="Settings" />
-            <StatRow label="Language model" value={settings.languageModel} />
+            <StatRow
+              label="Active language"
+              value={realtime.activeLanguage || `${settings.languageModel} (pending)`}
+            />
           </div>
           <p className="mt-4 text-sm text-app-muted">
             The desktop surface currently manages preview and interaction states. The Python

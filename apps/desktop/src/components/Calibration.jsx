@@ -8,29 +8,42 @@ export default function Calibration({ onComplete }) {
   const [progress, setProgress] = useState(0)
 
   const startedAt = useRef(0)
-  const { calibration, updateCalibration } = useStore()
+  const confidenceReadings = useRef([])
+  const { realtime, calibration, updateCalibration } = useStore()
 
   useEffect(() => {
     if (!isCalibrating) {
+      confidenceReadings.current = []
       return
     }
 
     startedAt.current = Date.now()
+    confidenceReadings.current = []
 
     const interval = window.setInterval(() => {
       const elapsedMs = Date.now() - startedAt.current
       const nextProgress = Math.min(100, (elapsedMs / 3500) * 100)
       setProgress(nextProgress)
 
+      // Collect confidence readings from the bridge
+      if (realtime.confidence > 0) {
+        confidenceReadings.current.push(realtime.confidence)
+      }
+
       if (nextProgress >= 100) {
-        const normalizedHandSize = 0.165
-        updateCalibration({ handSize: normalizedHandSize, isCalibrated: true })
+        // Calculate average confidence baseline from collected readings
+        const readings = confidenceReadings.current
+        const avgConfidence = readings.length > 0
+          ? readings.reduce((sum, val) => sum + val, 0) / readings.length
+          : 0.7 // fallback default
+
+        updateCalibration({ handConfidenceBaseline: avgConfidence, isCalibrated: true })
         setIsCalibrating(false)
       }
     }, 50)
 
     return () => window.clearInterval(interval)
-  }, [isCalibrating, updateCalibration])
+  }, [isCalibrating, realtime.confidence, updateCalibration])
 
   const secondsRemaining = useMemo(
     () => Math.max(0, Math.ceil(((100 - progress) / 100) * 3.5)),
@@ -56,10 +69,12 @@ export default function Calibration({ onComplete }) {
           </div>
           <div className="mt-3 text-sm text-app-muted">
             {isCalibrating
-              ? `Keep your hand steady for about ${secondsRemaining} more second${secondsRemaining === 1 ? '' : 's'}.`
+              ? `Keep your hand steady for about ${secondsRemaining} more second${secondsRemaining === 1 ? '' : 's'}. Collecting confidence readings...`
               : isComplete
-                ? 'Baseline profile saved for this desktop preview.'
-                : 'Start when your hand is centered inside the guide box.'}
+                ? 'Confidence baseline profile saved for this desktop setup.'
+                : realtime.bridgeStatus === 'connected'
+                  ? 'Start when your hand is centered inside the guide box.'
+                  : 'Connect the Python recognizer with WebSocket bridge to enable calibration.'}
           </div>
         </div>
       </section>
@@ -82,7 +97,7 @@ export default function Calibration({ onComplete }) {
             Saved baseline
           </div>
           <div className="mt-4 grid gap-3">
-            <StatRow label="Stored hand size" value={calibration.handSize ? calibration.handSize.toFixed(4) : 'Not saved'} />
+            <StatRow label="Confidence baseline" value={calibration.handConfidenceBaseline ? calibration.handConfidenceBaseline.toFixed(4) : 'Not saved'} />
             <StatRow label="Status" value={isComplete ? 'Ready' : isCalibrating ? 'Running' : 'Pending'} />
           </div>
         </section>
@@ -91,6 +106,7 @@ export default function Calibration({ onComplete }) {
           {!isComplete && (
             <Button
               variant="primary"
+              disabled={realtime.bridgeStatus !== 'connected'}
               onClick={() => {
                 setProgress(0)
                 setIsCalibrating(true)
