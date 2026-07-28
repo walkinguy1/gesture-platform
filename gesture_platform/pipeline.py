@@ -18,11 +18,14 @@ import logging
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
+import numpy as np
 
 from .asl_recognizer import ASLRecognizer
+from .dynamic_recognizer import DynamicGestureRecognizer
 from .feature_extractor import FeatureExtractor
 from .hand_tracker import HandTracker
 from .normalizer import Normalizer
@@ -67,6 +70,13 @@ class PipelineResult:
         if self.hands:
             return float(self.hands[0].get("confidence", 0.0))
         return 0.0
+
+    @property
+    def prediction_kind(self) -> Optional[str]:
+        """Return 'static' or 'dynamic' for the first hand's prediction, or None."""
+        if self.hands:
+            return self.hands[0].get("prediction_kind")
+        return None
 
 
 # ------------------------------------------------------------------
@@ -117,6 +127,7 @@ class AsyncPipeline:
         capture_queue_size: int = 3,
         inference_queue_size: int = 10,
         hand_tracker_model_path: Optional[str] = None,
+        dynamic_model_path: Optional[str] = None,
         on_result: Optional[Callable[[PipelineResult], None]] = None,
     ) -> None:
         self.model_path = model_path
@@ -127,6 +138,7 @@ class AsyncPipeline:
         self.use_smoothing = use_smoothing
         self.show_landmarks = show_landmarks
         self.max_num_hands = max_num_hands
+        self.dynamic_model_path = dynamic_model_path
         self.on_result = on_result
 
         # Queues
@@ -143,6 +155,7 @@ class AsyncPipeline:
         self._normalizer: Optional[Normalizer] = None
         self._extractor: Optional[FeatureExtractor] = None
         self._recognizer: Optional[ASLRecognizer] = None
+        self._dynamic_recognizer: Optional[DynamicGestureRecognizer] = None
         self._hand_tracker_model_path = hand_tracker_model_path
 
         # FPS tracking (thread-safe via GIL for simple float assignment)
@@ -259,6 +272,49 @@ class AsyncPipeline:
         """Print a summary of performance statistics."""
         self._perf_monitor.print_summary()
 
+    def reload_recognizers(
+        self,
+        model_path: Optional[str] = None,
+        dynamic_model_path: Optional[str] = None,
+    ) -> None:
+        """
+        Hot-swap the static and/or dynamic recognizer models while the
+        pipeline keeps running -- e.g. when the user switches sign language
+        in the UI. Pass ``dynamic_model_path=""`` to explicitly clear a
+        previously-loaded dynamic model.
+
+        Args:
+            model_path: New static (fingerspelling) model path, or None to
+                leave the static recognizer untouched.
+            dynamic_model_path: New dynamic (word/phrase) model path, empty
+                string to unload, or None to leave untouched.
+        """
+        if model_path:
+            self.model_path = model_path
+            self._recognizer = ASLRecognizer(
+                model_path=model_path,
+                confidence_threshold=self.confidence_threshold,
+                use_smoothing=self.use_smoothing,
+            )
+            logger.info("Static recognizer reloaded from %s.", model_path)
+
+        if dynamic_model_path is not None:
+            self.dynamic_model_path = dynamic_model_path
+            new_dynamic = DynamicGestureRecognizer(use_smoothing=self.use_smoothing)
+            if dynamic_model_path and Path(dynamic_model_path).exists():
+                try:
+                    new_dynamic.load_model(dynamic_model_path)
+                    logger.info("Dynamic recognizer reloaded from %s.", dynamic_model_path)
+                except Exception:
+                    logger.warning(
+                        "Dynamic gesture model at %s failed to load; continuing static-only.",
+                        dynamic_model_path,
+                    )
+            self._dynamic_recognizer = new_dynamic
+
+        if self._extractor is not None:
+            self._extractor.reset_buffer()
+
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
@@ -330,6 +386,16 @@ class AsyncPipeline:
             confidence_threshold=self.confidence_threshold,
             use_smoothing=self.use_smoothing,
         )
+
+        self._dynamic_recognizer = DynamicGestureRecognizer(use_smoothing=self.use_smoothing)
+        if self.dynamic_model_path and Path(self.dynamic_model_path).exists():
+            try:
+                self._dynamic_recognizer.load_model(self.dynamic_model_path)
+            except Exception:
+                logger.warning(
+                    "Dynamic gesture model at %s failed to load; continuing static-only.",
+                    self.dynamic_model_path,
+                )
 
     # ------------------------------------------------------------------
     # Worker threads
@@ -414,23 +480,41 @@ class AsyncPipeline:
 
             for hand in hands:
                 landmarks = hand["landmarks"]
+                pred, conf, kind = None, 0.0, None
 
                 try:
                     with self._perf_monitor.time("normalization"):
                         normalized = self._normalizer.normalize(landmarks)  # type: ignore[union-attr]
 
                     with self._perf_monitor.time("feature_extraction"):
+                        # extract() feeds the rolling motion buffer (used by
+                        # the dynamic recognizer below); extract_static()
+                        # just flattens the current frame for the static one.
+                        self._extractor.extract(normalized, add_to_buffer=True)  # type: ignore[union-attr]
                         features = self._extractor.extract_static(normalized)  # type: ignore[union-attr]
 
                     if self.use_smoothing:
                         with self._perf_monitor.time("inference_smoothed"):
-                            pred, conf = self._recognizer.predict_with_smoothing(features)  # type: ignore[union-attr]
+                            static_pred, static_conf = self._recognizer.predict_with_smoothing(features)  # type: ignore[union-attr]
                     else:
                         with self._perf_monitor.time("inference"):
-                            pred, conf = self._recognizer.predict(features)  # type: ignore[union-attr]
+                            static_pred, static_conf = self._recognizer.predict(features)  # type: ignore[union-attr]
+
+                    dyn_pred, dyn_conf = None, 0.0
+                    if self._dynamic_recognizer is not None and self._dynamic_recognizer.is_loaded():
+                        with self._perf_monitor.time("dynamic_inference"):
+                            dyn_pred, dyn_conf = self._dynamic_recognizer.predict_from_buffer(self._extractor)  # type: ignore[union-attr]
+
+                    # A confidently-recognized dynamic gesture takes priority:
+                    # motion large enough to trigger it usually means the hand
+                    # isn't holding a static fingerspelling shape right now.
+                    if dyn_pred is not None:
+                        pred, conf, kind = dyn_pred, dyn_conf, "dynamic"
+                    elif static_pred is not None:
+                        pred, conf, kind = static_pred, static_conf, "static"
                 except Exception:
                     logger.exception("Error in model inference.")
-                    pred, conf = None, 0.0
+                    pred, conf, kind = None, 0.0, None
 
                 if self.show_landmarks:
                     self._tracker.draw_landmarks(frame, hand)  # type: ignore[union-attr]
@@ -439,6 +523,7 @@ class AsyncPipeline:
                     {
                         "prediction": pred,
                         "confidence": conf,
+                        "prediction_kind": kind,
                         "handedness": hand.get("handedness", "Unknown"),
                         "landmarks": landmarks,
                     }
