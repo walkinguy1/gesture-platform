@@ -79,9 +79,9 @@ class TestMLPRecognizer:
     def test_reset_smoothing_clears_buffer(self, mlp_recognizer_trained, sample_features):
         for _ in range(5):
             mlp_recognizer_trained.predict_with_smoothing(sample_features)
-        assert len(mlp_recognizer_trained._prediction_buffer) > 0
+        assert len(mlp_recognizer_trained._smoother) > 0
         mlp_recognizer_trained.reset_smoothing()
-        assert len(mlp_recognizer_trained._prediction_buffer) == 0
+        assert len(mlp_recognizer_trained._smoother) == 0
 
     def test_confidence_threshold_filters_low_confidence(self, mlp_recognizer_trained, sample_features):
         mlp_recognizer_trained.set_confidence_threshold(1.0)
@@ -524,7 +524,7 @@ class TestPerformanceBenchmarks:
             mlp_recognizer_trained.predict_with_smoothing(features)
 
         # Buffer should be bounded by smoothing_window
-        assert len(mlp_recognizer_trained._prediction_buffer) <= mlp_recognizer_trained.smoothing_window
+        assert len(mlp_recognizer_trained._smoother) <= mlp_recognizer_trained.smoothing_window
 
     def test_model_save_load_performance(self, mlp_recognizer_trained, performance_monitor):
         """Benchmark save and load operations."""
