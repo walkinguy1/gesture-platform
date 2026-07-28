@@ -22,7 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .exceptions import (
+    ModelLoadError,
     ModelNotLoadedError,
+    ModelSaveError,
     PredictionError,
     InputValidationError,
 )
@@ -598,4 +600,102 @@ class ASLRecognizer:
             f"classes={len(self.classes)})"
         )
 
+
+class ModelLoader:
+    """
+    Utility class for loading and saving models with error handling.
+
+    Provides convenient methods for model persistence and loading.
+    """
+
+    @staticmethod
+    def load(model_path: str) -> ASLRecognizer:
+        """
+        Load a model and return ASLRecognizer instance.
+
+        Args:
+            model_path: Path to model file
+
+        Returns:
+            ASLRecognizer instance with loaded model
+
+        Raises:
+            ModelLoadError: If model loading fails
+        """
+        try:
+            recognizer = ASLRecognizer(model_path=model_path)
+            if not recognizer.is_loaded():
+                raise ModelLoadError(f"Failed to load model from {model_path}")
+            return recognizer
+        except ModelLoadError:
+            raise
+        except Exception as e:
+            raise ModelLoadError(f"Error loading model: {e}") from e
+
+    @staticmethod
+    def save(
+        model: Any,
+        classes: List[str],
+        model_path: str,
+    ) -> bool:
+        """
+        Save a model to file with error handling.
+
+        Args:
+            model: Trained model object
+            classes: List of class labels
+            model_path: Path to save model
+
+        Returns:
+            True if saved successfully
+
+        Raises:
+            ModelSaveError: If model saving fails
+        """
+        try:
+            if model is None:
+                raise ValueError("Model cannot be None")
+
+            if not classes or not isinstance(classes, (list, tuple)):
+                raise ValueError("Classes must be a non-empty list or tuple")
+
+            path = Path(model_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            model_data = {
+                'model': model,
+                'classes': classes,
+                'version': '2.0',
+            }
+
+            temp_path = path.with_suffix('.pkl.tmp')
+            with open(temp_path, 'wb') as f:
+                pickle.dump(model_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+            temp_path.replace(path)
+
+            logger.info("Model saved to %s", model_path)
+            return True
+
+        except PermissionError as e:
+            error_msg = f"Permission denied saving to {model_path}"
+            logger.error(error_msg)
+            raise ModelSaveError(error_msg) from e
+        except OSError as e:
+            error_msg = f"IO error saving model: {e}"
+            logger.error(error_msg)
+            raise ModelSaveError(error_msg) from e
+        except ValueError as e:
+            error_msg = f"Invalid model data: {e}"
+            logger.error(error_msg)
+            raise ModelSaveError(error_msg) from e
+        except Exception as e:
+            error_msg = f"Unexpected error saving model: {e}"
+            logger.exception(error_msg)
+            raise ModelSaveError(error_msg) from e
+
+    @staticmethod
+    def get_default_model_path() -> str:
+        """Get the default model path."""
+        return "models/asl_alphabet.pkl"
 
