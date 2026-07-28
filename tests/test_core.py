@@ -355,15 +355,14 @@ class TestASLRecognizer:
         """Test smoothing buffer operations."""
         recognizer = ASLRecognizer(use_smoothing=True)
 
-        recognizer._prediction_buffer = [
-            ('A', 0.9),
-            ('A', 0.9),
-            ('B', 0.8)
-        ]
+        recognizer._smoother.add('A', 0.9)
+        recognizer._smoother.add('A', 0.9)
+        recognizer._smoother.add('B', 0.8)
+        assert len(recognizer._smoother) == 3
 
         recognizer.reset_smoothing()
 
-        assert len(recognizer._prediction_buffer) == 0
+        assert len(recognizer._smoother) == 0
 
 
 class TestIntegration:
