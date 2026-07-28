@@ -15,6 +15,8 @@ import logging
 from collections import Counter, deque
 from typing import Deque, List, Optional, Tuple
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
