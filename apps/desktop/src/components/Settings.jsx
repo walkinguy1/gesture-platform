@@ -59,7 +59,7 @@ function Settings({ onBack }) {
 
         <Panel title="Practice profile" eyebrow="Learner">
           <StatRow label="Calibration" value={calibration.isCalibrated ? 'Completed' : 'Recommended'} />
-          <StatRow label="Confidence baseline" value={calibration.handConfidenceBaseline ? calibration.handConfidenceBaseline.toFixed(4) : 'Not stored'} />
+          <StatRow label="Measured hand size" value={calibration.handSize ? calibration.handSize.toFixed(4) : 'Not stored'} />
           <StatRow label="Letters mastered" value={`${masteredLetters.length}/26`} />
           <StatRow label="Practice time" value={`${progress.totalPracticeTime} min`} />
         </Panel>
@@ -104,7 +104,8 @@ function Settings({ onBack }) {
         <Panel title="Camera" eyebrow="Input">
           <div className="grid gap-3">
             <div className="text-sm text-app-muted">
-              Pick the camera index the preview should request.
+              Pick the camera the recognizer should open. The backend owns the
+              device and streams its view back to this preview.
             </div>
             <div className="flex flex-wrap gap-2">
               {CAMERA_CHOICES.map((cameraIndex) => (
@@ -192,7 +193,7 @@ function Settings({ onBack }) {
 
           <ToggleRow
             label="Prediction smoothing"
-            body="Favor repeated detections before the UI treats them as stable."
+            body="Have the recognizer favor repeated detections before reporting a sign as stable."
             checked={settings.smoothingEnabled}
             onToggle={() =>
               updateSettings({ smoothingEnabled: !settings.smoothingEnabled })
@@ -200,8 +201,8 @@ function Settings({ onBack }) {
           />
 
           <ToggleRow
-            label="Guide overlay"
-            body="Show the framing box on top of the camera preview."
+            label="Hand landmarks"
+            body="Draw the tracked hand skeleton and framing box on the preview."
             checked={settings.showLandmarks}
             onToggle={() =>
               updateSettings({ showLandmarks: !settings.showLandmarks })
@@ -211,7 +212,7 @@ function Settings({ onBack }) {
 
         <Panel title="Shortcuts and model scope" eyebrow="Reference">
           <div className="grid gap-3">
-            <StatRow label="Esc" value="Return home" />
+            <StatRow label="D" value="Dashboard" />
             <StatRow label="P" value="Practice mode" />
             <StatRow label="L" value="Live captions" />
             <StatRow label="C" value="Calibration" />
@@ -222,8 +223,8 @@ function Settings({ onBack }) {
             />
           </div>
           <p className="mt-4 text-sm text-app-muted">
-            The desktop surface currently manages preview and interaction states. The Python
-            scripts in this repo still handle the full recognizer pipeline.
+            Recognition runs in the Python backend, which the app launches on startup.
+            Changes on this page are pushed to it live over the bridge.
           </p>
         </Panel>
 

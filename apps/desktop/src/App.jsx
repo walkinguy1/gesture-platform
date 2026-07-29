@@ -1,17 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
-import { useBridge } from './hooks/useBridge'
+import { useBridge, toBackendSettings } from './hooks/useBridge'
 import PracticeMode from './components/PracticeMode'
 import LiveCaptionMode from './components/LiveCaptionMode'
 import Settings from './components/Settings'
 import Calibration from './components/Calibration'
 import Dashboard from './components/Dashboard'
 import Navigation from './components/Navigation'
-import { MODES, KEYBOARD_SHORTCUTS } from './constants'
+import { MODES, MODE_LABELS, KEYBOARD_SHORTCUTS } from './constants'
 
 function App() {
   const [mode, setMode] = useState(MODES.DASHBOARD)
-  const { realtime, calibration, progress, settings } = useStore()
+  const { realtime, settings } = useStore()
+
+  const lastSentSettingsRef = useRef(null)
+  const wasConnectedRef = useRef(false)
 
   // Establishes the WebSocket connection to the Python recognizer backend
   // and keeps `realtime.*` in the store updated for every other component.
@@ -35,6 +38,40 @@ function App() {
       sendMessage({ type: 'set_language', code: settings.languageModel })
     }
   }, [realtime.bridgeStatus, realtime.activeLanguage, settings.languageModel])
+
+  // Keep the recognizer's thresholds/toggles in step with the UI. Without
+  // this the sliders only changed how the frontend filtered predictions the
+  // backend had already thrown away at its own fixed threshold.
+  useEffect(() => {
+    if (realtime.bridgeStatus !== 'connected') {
+      wasConnectedRef.current = false
+      lastSentSettingsRef.current = null
+      return
+    }
+
+    const payload = toBackendSettings(settings)
+    const serialized = JSON.stringify(payload)
+
+    if (!wasConnectedRef.current) {
+      // useBridge pushes the full set in its onopen handler, so on the
+      // connect transition just record what it sent rather than duplicating.
+      wasConnectedRef.current = true
+      lastSentSettingsRef.current = serialized
+      return
+    }
+
+    if (serialized === lastSentSettingsRef.current) {
+      return
+    }
+    lastSentSettingsRef.current = serialized
+    sendMessage({ type: 'set_settings', settings: payload })
+  }, [
+    realtime.bridgeStatus,
+    settings.confidenceThreshold,
+    settings.smoothingEnabled,
+    settings.showLandmarks,
+    settings.cameraIndex
+  ])
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -83,7 +120,7 @@ function App() {
       <div className="ml-64 mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-5 sm:px-6 lg:px-8">
         <header className="h-12 mb-6 flex items-center justify-between">
           <div className="text-sm font-semibold uppercase tracking-wider text-app-muted">
-            {MODES[mode] || 'Dashboard'}
+            {MODE_LABELS[mode] || 'Dashboard'}
           </div>
           <div className="text-xs text-app-muted">
             {realtime.bridgeStatus === 'connected' ? '● Connected' : '○ Disconnected'}

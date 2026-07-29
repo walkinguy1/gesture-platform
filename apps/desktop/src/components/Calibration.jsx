@@ -1,56 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { useStore } from '../store'
 import CameraView from './CameraView'
 import { StatRow, Button } from './index'
 
 export default function Calibration({ onComplete }) {
-  const [isCalibrating, setIsCalibrating] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const { realtime, calibration, bridgeApi } = useStore()
 
-  const startedAt = useRef(0)
-  const confidenceReadings = useRef([])
-  const { realtime, calibration, updateCalibration } = useStore()
+  // Calibration runs in the backend: it samples 90 frames of real landmark
+  // data and feeds the median hand size into Normalizer. This view only
+  // starts/stops it and mirrors the progress the backend reports.
+  const isCalibrating =
+    realtime.calibrationState === 'started' || realtime.calibrationState === 'progress'
+  const progress = Math.round((realtime.calibrationProgress || 0) * 100)
+  const isComplete = realtime.calibrationState === 'complete' || calibration.isCalibrated
+  const isConnected = realtime.bridgeStatus === 'connected'
 
-  useEffect(() => {
-    if (!isCalibrating) {
-      confidenceReadings.current = []
-      return
-    }
+  const startCalibration = () => {
+    bridgeApi.sendMessage?.({ type: 'start_calibration' })
+  }
 
-    startedAt.current = Date.now()
-    confidenceReadings.current = []
-
-    const interval = window.setInterval(() => {
-      const elapsedMs = Date.now() - startedAt.current
-      const nextProgress = Math.min(100, (elapsedMs / 3500) * 100)
-      setProgress(nextProgress)
-
-      // Collect confidence readings from the bridge
-      if (realtime.confidence > 0) {
-        confidenceReadings.current.push(realtime.confidence)
-      }
-
-      if (nextProgress >= 100) {
-        // Calculate average confidence baseline from collected readings
-        const readings = confidenceReadings.current
-        const avgConfidence = readings.length > 0
-          ? readings.reduce((sum, val) => sum + val, 0) / readings.length
-          : 0.7 // fallback default
-
-        updateCalibration({ handConfidenceBaseline: avgConfidence, isCalibrated: true })
-        setIsCalibrating(false)
-      }
-    }, 50)
-
-    return () => window.clearInterval(interval)
-  }, [isCalibrating, realtime.confidence, updateCalibration])
+  const cancelCalibration = () => {
+    bridgeApi.sendMessage?.({ type: 'cancel_calibration' })
+  }
 
   const secondsRemaining = useMemo(
-    () => Math.max(0, Math.ceil(((100 - progress) / 100) * 3.5)),
+    () => Math.max(0, Math.ceil(((100 - progress) / 100) * 3)),
     [progress]
   )
-
-  const isComplete = progress >= 100
 
   return (
     <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
@@ -69,12 +45,12 @@ export default function Calibration({ onComplete }) {
           </div>
           <div className="mt-3 text-sm text-app-muted">
             {isCalibrating
-              ? `Keep your hand steady for about ${secondsRemaining} more second${secondsRemaining === 1 ? '' : 's'}. Collecting confidence readings...`
+              ? `Keep your hand flat and steady for about ${secondsRemaining} more second${secondsRemaining === 1 ? '' : 's'}. Progress only advances while a hand is visible.`
               : isComplete
-                ? 'Confidence baseline profile saved for this desktop setup.'
-                : realtime.bridgeStatus === 'connected'
+                ? 'Hand size measured and applied to the recognizer for this setup.'
+                : isConnected
                   ? 'Start when your hand is centered inside the guide box.'
-                  : 'Connect the Python recognizer with WebSocket bridge to enable calibration.'}
+                  : 'Waiting for the Python recognizer to connect before calibration can run.'}
           </div>
         </div>
       </section>
@@ -97,26 +73,26 @@ export default function Calibration({ onComplete }) {
             Saved baseline
           </div>
           <div className="mt-4 grid gap-3">
-            <StatRow label="Confidence baseline" value={calibration.handConfidenceBaseline ? calibration.handConfidenceBaseline.toFixed(4) : 'Not saved'} />
+            <StatRow
+              label="Measured hand size"
+              value={calibration.handSize ? calibration.handSize.toFixed(4) : 'Not saved'}
+            />
             <StatRow label="Status" value={isComplete ? 'Ready' : isCalibrating ? 'Running' : 'Pending'} />
           </div>
         </section>
 
         <div className="flex flex-wrap gap-3">
-          {!isComplete && (
-            <Button
-              variant="primary"
-              disabled={realtime.bridgeStatus !== 'connected'}
-              onClick={() => {
-                setProgress(0)
-                setIsCalibrating(true)
-              }}
-            >
-              {isCalibrating ? 'Restart calibration' : 'Start calibration'}
+          {isCalibrating ? (
+            <Button variant="danger" onClick={cancelCalibration}>
+              Cancel
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={!isConnected} onClick={startCalibration}>
+              {isComplete ? 'Recalibrate' : 'Start calibration'}
             </Button>
           )}
 
-          {isComplete && (
+          {isComplete && !isCalibrating && (
             <Button variant="primary" onClick={onComplete}>
               Continue
             </Button>

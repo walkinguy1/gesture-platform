@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Gesture Platform - ASL Translator",
         "width": 1280,
         "height": 800,
@@ -36,21 +37,5 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {
-    "dialog": {
-      "all": true
-    },
-    "fs": {
-      "all": true,
-      "scope": [
-        "$APPDATA/*",
-        "$HOME/*",
-        "$DESKTOP/*"
-      ]
-    },
-    "shell": {
-      "all": false,
-      "open": true
-    }
-  }
+  "plugins": {}
 }

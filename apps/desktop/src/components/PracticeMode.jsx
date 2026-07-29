@@ -15,13 +15,19 @@ export default function PracticeMode({ onBack }) {
   const successTimeout = useRef(null)
 
   const {
-    prediction,
-    confidence,
+    realtime,
+    session,
     progress,
     settings,
     updateProgress,
-    addPracticeTime
+    addPracticeTime,
+    setFocusLetter
   } = useStore()
+
+  // Live recognizer output lives under `realtime` in the store -- reading
+  // `prediction`/`confidence` off the root yields undefined, which silently
+  // stops the practice loop from ever advancing.
+  const { prediction, confidence } = realtime
 
   const maxAttempts = PRACTICE_CONFIG.MAX_ATTEMPTS
 
@@ -37,6 +43,20 @@ export default function PracticeMode({ onBack }) {
     () => ALPHABET.filter((letter) => !progress.letters.some(l => l.letter === letter)),
     [progress.letters]
   )
+
+  // Honor a letter picked from the Dashboard grid, then clear it so returning
+  // to practice later doesn't snap back to a stale choice.
+  useEffect(() => {
+    if (!session.focusLetter) {
+      return
+    }
+
+    setCurrentLetter(session.focusLetter)
+    setAttempts(0)
+    setShowSuccess(false)
+    setFeedback(`Focusing on ${session.focusLetter}. Hold the sign steadily to count a rep.`)
+    setFocusLetter(null)
+  }, [session.focusLetter, setFocusLetter])
 
   useEffect(() => {
     if (unmasteredLetters.length > 0 && progress.letters.some(l => l.letter === currentLetter)) {

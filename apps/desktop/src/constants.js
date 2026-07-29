@@ -17,6 +17,16 @@ export const MODES = {
   DASHBOARD: 'dashboard'
 }
 
+// Display names for each mode, keyed by MODES *value* (not key) so callers
+// can look up straight from the current mode string.
+export const MODE_LABELS = {
+  [MODES.DASHBOARD]: 'Dashboard',
+  [MODES.PRACTICE]: 'Practice',
+  [MODES.LIVE_CAPTION]: 'Live Captions',
+  [MODES.SETTINGS]: 'Settings',
+  [MODES.CALIBRATION]: 'Calibration'
+}
+
 // Feature cards for home screen
 export const FEATURE_CARDS = [
   {

@@ -49,7 +49,10 @@ export const useStore = create()(
       // ──────── CALIBRATION (Device Profile) ────────
       calibration: {
         isCalibrated: false,
-        handConfidenceBaseline: null
+        // Median wrist-to-middle-fingertip distance measured by the backend.
+        // Persisted and replayed on reconnect so Normalizer keeps its
+        // calibration across restarts.
+        handSize: null
       },
 
       // ──────── PROGRESS (Learner Stats) ────────
@@ -69,7 +72,11 @@ export const useStore = create()(
         bridgeStatus: 'disconnected',
         languages: [], // [{ code, name, country, static_ready, dynamic_ready, supports_dynamic }]
         activeLanguage: null, // backend-confirmed active language code
-        lastError: null
+        lastError: null,
+        // Live calibration run driven by the backend:
+        // 'idle' | 'started' | 'progress' | 'complete' | 'cancelled'
+        calibrationState: 'idle',
+        calibrationProgress: 0
       },
 
       // WS bridge command channel, wired up by useBridge() on mount so any
@@ -136,6 +143,10 @@ export const useStore = create()(
         realtime: { ...state.realtime, lastError: message }
       })),
 
+      setCalibrationState: (calibrationState, calibrationProgress = 0) => set((state) => ({
+        realtime: { ...state.realtime, calibrationState, calibrationProgress }
+      })),
+
       setBridgeApi: (api) => set(() => ({ bridgeApi: api })),
 
       setFocusLetter: (letter) => set((state) => ({
@@ -152,7 +163,9 @@ export const useStore = create()(
           bridgeStatus: 'disconnected',
           languages: state.realtime.languages,
           activeLanguage: state.realtime.activeLanguage,
-          lastError: null
+          lastError: null,
+          calibrationState: 'idle',
+          calibrationProgress: 0
         }
       })),
 
