@@ -65,6 +65,53 @@ def test_broadcast_languages_and_language_changed(bridge_thread):
         assert msg2["code"] == "BSL"
 
 
+def test_broadcast_frame_delivers_preview_payload(bridge_thread):
+    """The desktop app renders these instead of opening the camera itself."""
+    bridge, _received, port = bridge_thread
+
+    with connect(f"ws://127.0.0.1:{port}") as client:
+        time.sleep(0.2)
+
+        bridge.broadcast_frame("aGVsbG8=", width=640, height=360)
+
+        message = json.loads(client.recv(timeout=3.0))
+        assert message["type"] == "frame"
+        assert message["data"] == "aGVsbG8="
+        assert message["width"] == 640
+        assert message["height"] == 360
+
+
+def test_broadcast_calibration_lifecycle(bridge_thread):
+    bridge, _received, port = bridge_thread
+
+    with connect(f"ws://127.0.0.1:{port}") as client:
+        time.sleep(0.2)
+
+        bridge.broadcast_calibration("started", 0.0)
+        started = json.loads(client.recv(timeout=3.0))
+        assert started["type"] == "calibration"
+        assert started["state"] == "started"
+        assert started["hand_size"] is None
+
+        bridge.broadcast_calibration("complete", 1.0, hand_size=0.1732)
+        done = json.loads(client.recv(timeout=3.0))
+        assert done["state"] == "complete"
+        assert done["progress"] == pytest.approx(1.0)
+        assert done["hand_size"] == pytest.approx(0.1732)
+
+
+def test_broadcast_settings_echo(bridge_thread):
+    bridge, _received, port = bridge_thread
+
+    with connect(f"ws://127.0.0.1:{port}") as client:
+        time.sleep(0.2)
+
+        bridge.broadcast_settings({"confidence_threshold": 0.85})
+        message = json.loads(client.recv(timeout=3.0))
+        assert message["type"] == "settings"
+        assert message["settings"]["confidence_threshold"] == pytest.approx(0.85)
+
+
 def test_server_receives_client_message(bridge_thread):
     bridge, received, port = bridge_thread
 
