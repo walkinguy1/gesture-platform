@@ -197,6 +197,48 @@ class WSBridge:
             "status": status,
         })
 
+    def broadcast_frame(self, jpeg_base64: str, width: int, height: int) -> None:
+        """
+        Broadcast one base64-encoded JPEG camera frame.
+
+        The Python backend owns the camera exclusively (a second consumer can
+        open the device but not read from it), so the frontend can't run its
+        own ``getUserMedia`` preview -- it renders this stream instead. Frames
+        arrive already annotated with hand landmarks, so the preview shows
+        exactly what the recognizer sees.
+        """
+        self.broadcast({
+            "type": "frame",
+            "data": jpeg_base64,
+            "width": width,
+            "height": height,
+        })
+
+    def broadcast_calibration(
+        self,
+        state: str,
+        progress: float = 0.0,
+        hand_size: Optional[float] = None,
+    ) -> None:
+        """
+        Broadcast calibration lifecycle updates.
+
+        Args:
+            state: 'started', 'progress', 'complete', or 'cancelled'
+            progress: 0.0-1.0 completion fraction
+            hand_size: The measured median hand size, set when state='complete'
+        """
+        self.broadcast({
+            "type": "calibration",
+            "state": state,
+            "progress": progress,
+            "hand_size": hand_size,
+        })
+
+    def broadcast_settings(self, settings: dict) -> None:
+        """Echo the backend's effective settings so the UI can confirm they applied."""
+        self.broadcast({"type": "settings", "settings": settings})
+
     def broadcast_error(self, message: str) -> None:
         """Broadcast a backend error string for the UI to surface."""
         self.broadcast({"type": "error", "message": message})
@@ -223,9 +265,18 @@ class WSBridgeThread:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
+        # Why startup failed, for callers that want to explain it to the user.
+        # The common case is the port already being bound by another backend.
+        self.start_error: Optional[BaseException] = None
 
     def start(self, timeout: float = 5.0) -> bool:
-        """Start the bridge on a background thread; blocks until it's listening."""
+        """
+        Start the bridge on a background thread.
+
+        Blocks until the server is listening or startup fails. Returns False on
+        failure (see ``start_error``) rather than letting the exception surface
+        as an unhandled traceback from the worker thread.
+        """
         def run():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
@@ -238,12 +289,21 @@ class WSBridgeThread:
 
             try:
                 self._loop.run_until_complete(_run())
+            except OSError as e:
+                self.start_error = e
+                logger.error("WebSocket bridge could not start: %s", e)
             finally:
+                # Always signal, so a failed start returns immediately instead
+                # of making the caller wait out the full timeout.
+                self._ready.set()
                 self._loop.close()
 
         self._thread = threading.Thread(target=run, name="WSBridge", daemon=True)
         self._thread.start()
-        return self._ready.wait(timeout=timeout)
+
+        if not self._ready.wait(timeout=timeout):
+            return False
+        return self.start_error is None and self.bridge.is_running()
 
     def stop(self) -> None:
         """Stop the bridge and join its thread."""
@@ -261,6 +321,15 @@ class WSBridgeThread:
 
     def broadcast_language_changed(self, *args, **kwargs) -> None:
         self.bridge.broadcast_language_changed(*args, **kwargs)
+
+    def broadcast_frame(self, *args, **kwargs) -> None:
+        self.bridge.broadcast_frame(*args, **kwargs)
+
+    def broadcast_calibration(self, *args, **kwargs) -> None:
+        self.bridge.broadcast_calibration(*args, **kwargs)
+
+    def broadcast_settings(self, *args, **kwargs) -> None:
+        self.bridge.broadcast_settings(*args, **kwargs)
 
     def broadcast_error(self, *args, **kwargs) -> None:
         self.bridge.broadcast_error(*args, **kwargs)
