@@ -112,6 +112,7 @@ dist-ssr/
 .client/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/Cargo.lock
+apps/desktop/src-tauri/gen/
 .windsurf/
 
 # MediaPipe model cache
