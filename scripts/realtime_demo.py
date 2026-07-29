@@ -11,6 +11,7 @@ Reference: PRD Section 6.2 (Real-Time Demo)
 import os
 import sys
 import argparse
+import base64
 import cv2
 import time
 from pathlib import Path
@@ -41,7 +42,8 @@ def parse_args():
         '--model',
         type=str,
         default='models/asl_alphabet.pkl',
-        help='Path to trained static (fingerspelling) model. Overridden by --language '
+        help='Path to trained static (finge' \
+        'rspelling) model. Overridden by --language '
              'when that language has its own registered static model.'
     )
     parser.add_argument(
@@ -95,6 +97,36 @@ def parse_args():
         action='store_true',
         help='Enable WebSocket bridge for frontend integration'
     )
+    parser.add_argument(
+        '--headless',
+        action='store_true',
+        help='Run without the OpenCV debug window (implies --ws-bridge). '
+             'Used when the desktop app launches this script as a background process.'
+    )
+    parser.add_argument(
+        '--no-stream',
+        action='store_true',
+        help='Do not broadcast camera frames over the bridge. The desktop app '
+             'preview will stay blank, since this process owns the camera.'
+    )
+    parser.add_argument(
+        '--stream-fps',
+        type=float,
+        default=15.0,
+        help='Max preview frames broadcast per second (inference is unaffected)'
+    )
+    parser.add_argument(
+        '--stream-width',
+        type=int,
+        default=640,
+        help='Downscale streamed preview frames to this width'
+    )
+    parser.add_argument(
+        '--stream-quality',
+        type=int,
+        default=65,
+        help='JPEG quality (1-100) for streamed preview frames'
+    )
 
     return parser.parse_args()
 
@@ -114,6 +146,10 @@ class RealtimeDemo:
         calibrate: bool = False,
         enable_ws_bridge: bool = False,
         language: str = 'ASL',
+        stream_frames: bool = True,
+        stream_fps: float = 15.0,
+        stream_width: int = 640,
+        stream_quality: int = 65,
     ):
         """
         Initialize the demo.
@@ -130,6 +166,13 @@ class RealtimeDemo:
             calibrate: Enable calibration mode
             enable_ws_bridge: Enable WebSocket bridge for frontend
             language: Sign language code to start with (e.g. 'ASL', 'BSL')
+            stream_frames: Broadcast annotated camera frames over the bridge so
+                the desktop app can render a preview. Required in headless mode,
+                where this process is the only thing that can open the camera.
+            stream_fps: Cap on frames broadcast per second (inference still runs
+                at full camera rate; only the preview is throttled).
+            stream_width: Frames are downscaled to this width before encoding.
+            stream_quality: JPEG quality (1-100) for streamed frames.
         """
         self.camera_index = camera_index
         self.frame_width = frame_width
@@ -165,10 +208,21 @@ class RealtimeDemo:
 
         # Camera
         self.cap = None
+        # Set by bridge commands from the UI; applied by the capture loop
+        # rather than the bridge thread, so the device is never reopened
+        # underneath an in-flight read().
+        self._pending_camera_index: int | None = None
 
         # Calibration state
         self.calibration_frames = []
         self.calibration_complete = False
+
+        # Preview streaming
+        self.stream_frames = stream_frames
+        self.stream_fps = stream_fps
+        self.stream_width = stream_width
+        self.stream_quality = stream_quality
+        self._last_stream_time = 0.0
 
         # WebSocket bridge
         self.ws_bridge: WSBridgeThread | None = None
@@ -245,7 +299,8 @@ class RealtimeDemo:
 
         self.ws_bridge = WSBridgeThread(on_message=self._handle_bridge_message)
         if not self.ws_bridge.start(timeout=5.0):
-            print("WebSocket bridge failed to start.")
+            reason = self.ws_bridge.start_error or "timed out"
+            print(f"WebSocket bridge failed to start: {reason}")
             self.ws_bridge = None
             return
 
@@ -297,6 +352,102 @@ class RealtimeDemo:
             self.recognizer.reset_smoothing()
             self.dynamic_recognizer.reset_smoothing()
             return
+
+        if msg_type == "set_settings":
+            self._apply_settings(data.get("settings") or data)
+            return
+
+        if msg_type == "start_calibration":
+            self.calibration_frames = []
+            self.calibration_complete = False
+            self.calibrate = True
+            if self.ws_bridge:
+                self.ws_bridge.broadcast_calibration("started", 0.0)
+            return
+
+        if msg_type == "cancel_calibration":
+            self.calibrate = False
+            self.calibration_frames = []
+            if self.ws_bridge:
+                self.ws_bridge.broadcast_calibration("cancelled", 0.0)
+            return
+
+        if msg_type == "set_calibration":
+            # The UI persists the measured hand size, so a reconnecting client
+            # can restore it here instead of making the user recalibrate every
+            # time the backend restarts.
+            hand_size = data.get("hand_size")
+            if isinstance(hand_size, (int, float)) and hand_size > 0:
+                self.normalizer.load_calibration(float(hand_size))
+                self.calibration_complete = True
+                if self.ws_bridge:
+                    self.ws_bridge.broadcast_calibration(
+                        "complete", 1.0, hand_size=float(hand_size)
+                    )
+            return
+
+    def _apply_settings(self, settings: dict) -> None:
+        """
+        Apply UI-supplied recognition settings to the live pipeline.
+
+        Called on the bridge's event-loop thread. Everything here is a plain
+        attribute assignment (atomic in CPython) except the camera switch,
+        which is deferred to the capture loop via ``_pending_camera_index``.
+        """
+        applied: dict = {}
+
+        threshold = settings.get("confidence_threshold")
+        if isinstance(threshold, (int, float)):
+            threshold = max(0.0, min(1.0, float(threshold)))
+            self.confidence_threshold = threshold
+            self.recognizer.set_confidence_threshold(threshold)
+            # The recognizer's adaptive-threshold logic re-derives from
+            # `base_confidence_threshold`, so without this the UI's value would
+            # be silently reverted on the next adjustment or smoothing reset.
+            self.recognizer.base_confidence_threshold = threshold
+            applied["confidence_threshold"] = threshold
+
+        smoothing = settings.get("smoothing_enabled")
+        if isinstance(smoothing, bool):
+            self.use_smoothing = smoothing
+            self.recognizer.use_smoothing = smoothing
+            applied["smoothing_enabled"] = smoothing
+
+        landmarks = settings.get("show_landmarks")
+        if isinstance(landmarks, bool):
+            self.show_landmarks = landmarks
+            applied["show_landmarks"] = landmarks
+
+        camera_index = settings.get("camera_index")
+        if isinstance(camera_index, int) and camera_index != self.camera_index:
+            self._pending_camera_index = camera_index
+            applied["camera_index"] = camera_index
+
+        if applied and self.ws_bridge:
+            self.ws_bridge.broadcast_settings(applied)
+            print(f"Applied settings from UI: {applied}")
+
+    def _apply_pending_camera(self) -> None:
+        """Reopen the capture device if the UI asked for a different camera."""
+        index = self._pending_camera_index
+        if index is None:
+            return
+        self._pending_camera_index = None
+
+        previous_index, previous_cap = self.camera_index, self.cap
+        self.camera_index = index
+        if self.setup_camera():
+            if previous_cap:
+                previous_cap.release()
+            return
+
+        # Roll back so the app keeps working on the camera that was fine.
+        print(f"Could not switch to camera {index}; staying on {previous_index}.")
+        if self.cap:
+            self.cap.release()
+        self.camera_index, self.cap = previous_index, previous_cap
+        if self.ws_bridge:
+            self.ws_bridge.broadcast_error(f"Camera {index} could not be opened.")
 
     def process_frame(self, frame: np.ndarray):
         """
@@ -409,6 +560,8 @@ class RealtimeDemo:
         # Complete calibration after 90 frames (3 seconds)
         if len(self.calibration_frames) >= 90:
             self._complete_calibration()
+        elif self.ws_bridge:
+            self.ws_bridge.broadcast_calibration("progress", min(1.0, progress))
 
         return frame, None, 0.0
 
@@ -429,9 +582,15 @@ class RealtimeDemo:
         self.normalizer.load_calibration(median_hand_size)
 
         self.calibration_complete = True
+        self.calibrate = False
         self.calibration_frames = []
 
         print(f"Calibration complete! Hand size: {median_hand_size:.4f}")
+
+        if self.ws_bridge:
+            self.ws_bridge.broadcast_calibration(
+                "complete", 1.0, hand_size=float(median_hand_size)
+            )
 
     def draw_prediction(
         self,
@@ -502,14 +661,7 @@ class RealtimeDemo:
 
     def draw_fps(self, frame: np.ndarray) -> np.ndarray:
         """Draw FPS counter on frame."""
-        # Calculate FPS
-        self.frame_count += 1
-        elapsed = time.time() - self.start_time
-
-        if elapsed >= 1.0:
-            self.fps = self.frame_count / elapsed
-            self.frame_count = 0
-            self.start_time = time.time()
+        self._tick_fps()
 
         # Draw FPS
         cv2.putText(
@@ -548,6 +700,57 @@ class RealtimeDemo:
 
         return frame
 
+    def _tick_fps(self) -> None:
+        """Advance the FPS counter (recomputed once per second)."""
+        self.frame_count += 1
+        elapsed = time.time() - self.start_time
+
+        if elapsed >= 1.0:
+            self.fps = self.frame_count / elapsed
+            self.frame_count = 0
+            self.start_time = time.time()
+
+    def _maybe_stream_frame(self, frame: np.ndarray) -> None:
+        """
+        Broadcast the annotated frame to connected clients, throttled to
+        ``stream_fps`` and downscaled to ``stream_width``.
+
+        Inference keeps running at the full camera rate -- only the preview is
+        throttled. Encoding is skipped entirely when nobody is listening, so an
+        unattended backend costs nothing extra.
+        """
+        if not self.stream_frames or not self.ws_bridge:
+            return
+        if self.ws_bridge.client_count() == 0:
+            return
+
+        now = time.time()
+        min_interval = 1.0 / self.stream_fps if self.stream_fps > 0 else 0.0
+        if now - self._last_stream_time < min_interval:
+            return
+        self._last_stream_time = now
+
+        height, width = frame.shape[:2]
+        if width > self.stream_width:
+            scale = self.stream_width / width
+            frame = cv2.resize(
+                frame,
+                (self.stream_width, int(round(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        ok, buffer = cv2.imencode(
+            '.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.stream_quality]
+        )
+        if not ok:
+            return
+
+        self.ws_bridge.broadcast_frame(
+            base64.b64encode(buffer).decode('ascii'),
+            width=frame.shape[1],
+            height=frame.shape[0],
+        )
+
     def run(self):
         """Run the demo."""
         # Setup camera
@@ -568,7 +771,7 @@ class RealtimeDemo:
             print("\nCalibration mode enabled!")
             print("Hold your hand flat in front of the camera for 3 seconds")
 
-        print(f"\nModel loaded: {self.model_path}")
+        print(f"\nModel loaded: {self.fallback_model_path}")
         print(f"Confidence threshold: {self.confidence_threshold}")
         print(f"Smoothing: {self.use_smoothing}")
         if self.enable_ws_bridge:
@@ -577,6 +780,8 @@ class RealtimeDemo:
         running = True
 
         while running:
+            self._apply_pending_camera()
+
             # Read frame
             ret, frame = self.cap.read()
 
@@ -607,6 +812,10 @@ class RealtimeDemo:
             # Draw FPS
             processed_frame = self.draw_fps(processed_frame)
 
+            # Mirror the annotated frame to any connected UI clients before the
+            # local-only help text is drawn over it.
+            self._maybe_stream_frame(processed_frame)
+
             # Draw help
             processed_frame = self.draw_help(processed_frame)
 
@@ -620,9 +829,14 @@ class RealtimeDemo:
                 running = False
 
             elif key == ord('c'):
-                # Start calibration
+                # Start calibration. `calibrate` has to be set here too --
+                # process_frame() gates on it, so without this the key did
+                # nothing unless the app was started with --calibrate.
                 self.calibration_frames = []
                 self.calibration_complete = False
+                self.calibrate = True
+                if self.ws_bridge:
+                    self.ws_bridge.broadcast_calibration("started", 0.0)
                 print("Starting calibration...")
 
             elif key == ord('r'):
@@ -635,6 +849,63 @@ class RealtimeDemo:
         # Cleanup
         self.stop_ws_bridge()
         self.cleanup()
+
+    def run_headless(self):
+        """
+        Run the recognition loop with no OpenCV window, output overlay, or
+        keyboard handling -- just camera capture, inference, and WS bridge
+        broadcasts. Used when the desktop app launches this script as a
+        background process instead of a user running it interactively.
+        """
+        # Bridge first, camera second. Headless mode has no output other than
+        # the bridge, so if the port is already taken another backend is
+        # already serving this app -- claiming the camera anyway would break
+        # the one that works (the device allows a second open, but then
+        # neither process can read reliably).
+        self.enable_ws_bridge = True
+        self.start_ws_bridge()
+        if not self.ws_bridge:
+            print(
+                "Headless mode needs the WebSocket bridge, but it could not start "
+                "(port 8765 is likely already in use by another backend). Exiting."
+            )
+            return
+
+        if not self.setup_camera():
+            self.stop_ws_bridge()
+            return
+
+        print(f"Headless bridge running (model: {self.fallback_model_path}).")
+        print("Waiting for frontend connections on ws://127.0.0.1:8765 ...")
+
+        try:
+            while True:
+                self._apply_pending_camera()
+
+                ret, frame = self.cap.read()
+                if not ret:
+                    print("Error: Failed to read frame")
+                    break
+
+                frame = cv2.flip(frame, 1)
+                processed, prediction, confidence, prediction_kind = self.process_frame(frame)
+
+                if self.ws_bridge:
+                    self.ws_bridge.broadcast_prediction(
+                        prediction, confidence, self.fps,
+                        prediction_kind=prediction_kind,
+                        language=self.registry.get_active_language(),
+                    )
+
+                self._tick_fps()
+                # Streamed after the FPS tick so the preview and the overlay
+                # the UI draws on top of it describe the same frame.
+                self._maybe_stream_frame(processed)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.stop_ws_bridge()
+            self.cleanup()
 
     def cleanup(self):
         """Cleanup resources."""
@@ -674,11 +945,18 @@ def main():
         use_smoothing=args.smoothing,
         show_landmarks=args.show_landmarks,
         calibrate=args.calibrate,
-        enable_ws_bridge=args.ws_bridge,
-        language=args.language
+        enable_ws_bridge=args.ws_bridge or args.headless,
+        language=args.language,
+        stream_frames=not args.no_stream,
+        stream_fps=args.stream_fps,
+        stream_width=args.stream_width,
+        stream_quality=args.stream_quality,
     )
 
-    demo.run()
+    if args.headless:
+        demo.run_headless()
+    else:
+        demo.run()
 
 
 if __name__ == '__main__':
